@@ -67,3 +67,9 @@ python fast_tffm.py dist_predict sample.cfg worker 1
   Should have the same line number with the corresponding data file. Each line contains one real number.
 
 Check the data/weight files in the data folder for details. The data files are sampled from [criteo lab dataset](http://labs.criteo.com/tag/dataset/).
+
+## Run with TFMesos
+
+```
+tfrun -w 4 -s 1 -m ${MESOS_MASTER} python fast_tffm.py dist_train sample.cfg {job_name} {task_index} {ps_hosts} {worker_hosts}
+```
