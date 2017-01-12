@@ -59,7 +59,7 @@ class FmModelBase:
         self.loss = None
       if optimizer != None:
         self.opt = optimizer.minimize(self.loss + reg_score)
-      self.init_vars = tf.initialize_all_variables()
+      self.init_vars = tf.global_variables_initializer()
       self.saver = tf.train.Saver(self.vocab_blocks)
   
   def main_ps_device(self):
