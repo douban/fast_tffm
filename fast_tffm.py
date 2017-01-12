@@ -36,7 +36,7 @@ cfg_file = sys.argv[2]
 if mode == 'train' or mode == 'predict':
   check_argument_error(argc == 3)
 elif mode == 'dist_train' or mode == 'dist_predict':
-  check_argument_error(argc == 5)
+  check_argument_error(argc == 5 or argc == 7)
   job_name = sys.argv[3]
   task_idx = int(sys.argv[4])
 else:
@@ -74,8 +74,12 @@ model_file = read_config(GENERAL_SECTION, 'model_file')
 hash_feature_id = read_config(GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
 
 if mode == 'dist_train' or mode == 'dist_predict':
-  ps_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'ps_hosts')
-  worker_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'worker_hosts')
+  if argc == 7:
+    ps_hosts = sys.argv[5].split(',')
+    worker_hosts = sys.argv[6].split(',')
+  else:
+    ps_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'ps_hosts')
+    worker_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'worker_hosts')
 
 if mode == 'train' or mode == 'dist_train':
   batch_size = int(read_config(TRAIN_SECTION, 'batch_size'))
