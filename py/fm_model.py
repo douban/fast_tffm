@@ -2,14 +2,13 @@ import os, threading, random, time, sys
 import tensorflow as tf
 from tensorflow.python.framework import ops
 from py.fm_ops import fm_ops
-
 class ModelStat:
   def __init__(self, name):
-    self.int_delta = tf.placeholder(dtype = tf.int32)
+    self.int_delta = tf.placeholder(dtype = tf.int64)
     self.float_delta = tf.placeholder(dtype = tf.float32)
     self.total_loss = tf.Variable(0.0, name = name + '_loss', trainable = False)
     self.incre_total_loss = self.total_loss.assign_add(self.float_delta, True)
-    self.total_example_num = tf.Variable(0, name = name + '_example_num', trainable = False)
+    self.total_example_num = tf.Variable(0, name = name + '_example_num', trainable = False, dtype=tf.int64)
     self.incre_total_example_num = self.total_example_num.assign_add(self.int_delta, True)
 
   def update(self, sess, loss_delta, example_num_delta):

@@ -1,4 +1,4 @@
-import ConfigParser, sys
+import ConfigParser, sys, glob
 from py.fm_ops import fm_ops
 from py.fm_train import local_train, dist_train
 from py.fm_predict import local_predict, dist_predict
@@ -71,6 +71,7 @@ factor_num = int(read_config(GENERAL_SECTION, 'factor_num'))
 vocabulary_size = int(read_config(GENERAL_SECTION, 'vocabulary_size'))
 vocabulary_block_num = int(read_config(GENERAL_SECTION, 'vocabulary_block_num'))
 model_file = read_config(GENERAL_SECTION, 'model_file')
+log_file = read_config(GENERAL_SECTION, 'log_file')
 hash_feature_id = read_config(GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
 
 if mode == 'dist_train' or mode == 'dist_predict':
@@ -89,10 +90,13 @@ if mode == 'train' or mode == 'dist_train':
   thread_num = int(read_config(TRAIN_SECTION, 'thread_num'))
   epoch_num = int(read_config(TRAIN_SECTION, 'epoch_num'))
   train_files = read_strs_config(TRAIN_SECTION, 'train_files')
+  train_files = sum((glob.glob(f) for f in train_files), [])
   weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
   if weight_files != None and len(train_files) != len(weight_files):
     raise ValueError('The numbers of train files and weight files do not match.')
   validation_files = read_strs_config(TRAIN_SECTION, 'validation_files', False)
+  validation_files = sum((glob.glob(f) for f in validation_files), [])
+  weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
   learning_rate = float(read_config(TRAIN_SECTION, 'learning_rate'))
   adagrad_init_accumulator = float(read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
   loss_type = read_config(TRAIN_SECTION, 'loss_type').strip().lower()
@@ -102,15 +106,15 @@ if mode == 'train' or mode == 'dist_train':
   optimizer = tf.train.AdagradOptimizer(learning_rate, adagrad_init_accumulator)
 
   if mode == 'train':
-    local_train(train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file)
+    local_train(train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file, log_file)
   else:
-    dist_train(ps_hosts, worker_hosts, job_name, task_idx, train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file)
+    dist_train(ps_hosts, worker_hosts, job_name, task_idx, train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file, log_file)
 elif mode == 'predict' or mode == 'dist_predict':
-  predict_files = read_config(PREDICT_SECTION, 'predict_files').split(',')
+  predict_files = read_config(PREDICT_SECTION, 'predict_files')
+  predict_files = glob.glob(predict_files)
   score_path = read_config(PREDICT_SECTION, 'score_path')
 
   if mode == 'predict':
     local_predict(predict_files, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, model_file, score_path)
   else:
     dist_predict(ps_hosts, worker_hosts, job_name, task_idx, predict_files, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, model_file, score_path)
-

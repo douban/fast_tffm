@@ -73,3 +73,15 @@ Check the data/weight files in the data folder for details. The data files are s
 ```
 tfrun -w 4 -s 1 -m ${MESOS_MASTER} python fast_tffm.py dist_train sample.cfg {job_name} {task_index} {ps_hosts} {worker_hosts}
 ```
+
+## Tensorboard Visualization
+
+Set the empty log directory path in `sample.cfg`. The default log saving frequency is 10 files per save. 
+
+Saving content includes the recent 10 files' RMSE and total RMSE of training and validation data.
+
+Find the directory of your tensorflow then use the following command to activate tensorboard:
+```
+python .../site-packages/tensorflow/tensorboard/tensorboard.py --logdir==your_log_dir
+```
+The default port is 6060.
