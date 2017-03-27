@@ -58,6 +58,16 @@ class FmModelBase:
         self.loss = None
       if optimizer != None:
         self.opt = optimizer.minimize(self.loss + reg_score)
+
+      with tf.name_scope('train'):
+        self.t_total_loss = tf.Variable(0.0)
+        t_total_loss_sum = tf.summary.scalar('train total loss', self.t_total_loss)
+        self.t_summary_op = tf.summary.merge([t_total_loss_sum])
+      with tf.name_scope('valid'):
+        self.v_total_loss = tf.Variable(0.0)
+        v_total_loss_sum = tf.summary.scalar('valid total loss', self.v_total_loss)
+        self.v_summary_op = tf.summary.merge([v_total_loss_sum])
+
       self.init_vars = tf.global_variables_initializer()
       self.saver = tf.train.Saver(self.vocab_blocks)
   

@@ -5,17 +5,7 @@ from math import sqrt
 
 class _TrainStats:
   pass
-def _train(sess, supervisor, worker_num, is_master_worker, need_to_init, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, log_file, output_progress_every_n_examples = 10000):
-  with tf.name_scope('train'):
-    t_recent_loss = tf.Variable(0.0)
-    t_total_loss = tf.Variable(0.0)
-    t_recent_loss_sum = tf.summary.scalar('train recent loss', t_recent_loss)
-    t_total_loss_sum = tf.summary.scalar('train total loss', t_total_loss)
-  with tf.name_scope('valid'):
-    v_recent_loss = tf.Variable(0.0)
-    v_total_loss = tf.Variable(0.0)
-    v_recent_loss_sum = tf.summary.scalar('valid recent loss', v_recent_loss)
-    v_total_loss_sum = tf.summary.scalar('valid total loss', v_total_loss)
+def _train(sess, supervisor, worker_num, is_master_worker, need_to_init, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, summary_writer, output_progress_every_n_examples = 10000):
   temp_num, temp_loss, train_len, valid_len  = 0, 0, len(train_files), len(validation_files)
   with sess as sess:
     if is_master_worker:
@@ -71,24 +61,20 @@ def _train(sess, supervisor, worker_num, is_master_worker, need_to_init, model, 
         for th in threads: th.start()
         coord.join(threads, stop_grace_period_secs=5)
 
-        summary_writer = tf.summary.FileWriter(log_file)
-
-        if divmod(fid, 10)[1]==0: # default as 10 Too many logs will break the training process
+        if fid % 10 == 0: # default as 10 Too many logs will break the training process
           if is_training:
             global_loss, global_example_num = model.training_stat[epoch_id].eval(sess)
           else:
             global_loss, global_example_num = model.validation_stat[epoch_id].eval(sess)
-          recent_loss = sqrt((global_loss - temp_loss)/(global_example_num - temp_num))
-          temp_loss, temp_num = global_loss, global_example_num
+          
           total_loss = sqrt(global_loss/global_example_num)
-          if is_training:
-            summary_op = tf.summary.merge([t_recent_loss_sum, t_total_loss_sum])
-            summary_str = sess.run(summary_op, feed_dict={t_recent_loss:recent_loss, t_total_loss:total_loss})
-            summary_writer.add_summary(summary_str, fid-epoch_id*valid_len)
-          else:
-            summary_op = tf.summary.merge([v_recent_loss_sum, v_total_loss_sum])
-            summary_str = sess.run(summary_op, feed_dict={v_recent_loss:recent_loss, v_total_loss:total_loss})
-            summary_writer.add_summary(summary_str, fid-(epoch_id+1)*train_len)
+          if summary_writer is not None:
+            if is_training:
+              summary_str = sess.run(model.t_summary_op, feed_dict={model.t_total_loss:total_loss})
+              summary_writer.add_summary(summary_str, fid)
+            else:
+              summary_str = sess.run(model.v_summary_op, feed_dict={model.v_total_loss:total_loss})
+              summary_writer.add_summary(summary_str, fid)
 
         print 'Finish Processing. Ex num: %d; Avg loss: %.5f.'%(global_example_num, global_loss / global_example_num)
         fid += 1
@@ -114,8 +100,9 @@ def _train(sess, supervisor, worker_num, is_master_worker, need_to_init, model, 
           print '; Validation: %.5f'%(validation_loss / validation_example_num)
         else:
           print
-        model.saver.save(sess, model_file, write_meta_graph = True)
-        print 'Model saved to', model_file
+
+      model.saver.save(sess, model_file, write_meta_graph = True)
+      print 'Model saved to', model_file
 
 def _queue_size(train_files, validation_files, epoch_num):
   qsize = len(train_files)
@@ -125,7 +112,8 @@ def _queue_size(train_files, validation_files, epoch_num):
 
 def local_train(train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file, log_file):
   model = LocalFmModel(_queue_size(train_files, validation_files, epoch_num), epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id,factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda)
-  _train(tf.Session(), None, 1, True, True, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, log_file)
+  summary_writer = tf.summary.FileWriter(log_file)
+  _train(tf.Session(), None, 1, True, True, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, summary_writer)
 
 def dist_train(ps_hosts, worker_hosts, job_name, task_idx, train_files, weight_files, validation_files, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda, thread_num, model_file, log_file):
   cluster = tf.train.ClusterSpec({'ps': ps_hosts, 'worker': worker_hosts})
@@ -134,8 +122,8 @@ def dist_train(ps_hosts, worker_hosts, job_name, task_idx, train_files, weight_f
     server.join()
   elif job_name == 'worker':
     model = DistFmModel(_queue_size(train_files, validation_files, epoch_num), cluster, task_idx, epoch_num, vocabulary_size, vocabulary_block_num, hash_feature_id, factor_num, init_value_range, loss_type, optimizer, batch_size, factor_lambda, bias_lambda)
-    sv = tf.train.Supervisor(is_chief = (task_idx == 0), init_op = model.init_vars)
-    _train(sv.managed_session(server.target, config = tf.ConfigProto(log_device_placement=False)), sv, len(worker_hosts), task_idx == 0, False, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, log_file)
+    sv = tf.train.Supervisor(is_chief = (task_idx == 0), init_op = model.init_vars, logdir=log_file)
+    _train(sv.managed_session(server.target, config = tf.ConfigProto(log_device_placement=False)), sv, len(worker_hosts), task_idx == 0, False, model, train_files, weight_files, validation_files, epoch_num, thread_num, model_file, sv.summary_writer)
   else:
     sys.stderr.write('Invalid Job Name: %s'%job_name)
     raise
