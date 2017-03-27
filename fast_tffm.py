@@ -63,7 +63,7 @@ def read_config(section, option, not_null = True):
     return value
 def read_strs_config(section, option, not_null = True):
   val = read_config(section, option, not_null)
-  if val != None:
+  if val is not None:
     return [s.strip() for s in val.split(STR_DELIMITER)]
   return None
 
@@ -92,11 +92,15 @@ if mode == 'train' or mode == 'dist_train':
   train_files = read_strs_config(TRAIN_SECTION, 'train_files')
   train_files = sum((glob.glob(f) for f in train_files), [])
   weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
-  if weight_files != None and len(train_files) != len(weight_files):
-    raise ValueError('The numbers of train files and weight files do not match.')
+  if weight_files is not None:
+    if not isinstance(weight_files, list):
+      weight_files = [weight_files]
+
+    weight_files = sum((glob.glob(f) for f in weight_files), [])
+    if len(train_files) != len(weight_files):
+      raise ValueError('The numbers of train files and weight files do not match.')
   validation_files = read_strs_config(TRAIN_SECTION, 'validation_files', False)
   validation_files = sum((glob.glob(f) for f in validation_files), [])
-  weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
   learning_rate = float(read_config(TRAIN_SECTION, 'learning_rate'))
   adagrad_init_accumulator = float(read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
   loss_type = read_config(TRAIN_SECTION, 'loss_type').strip().lower()
