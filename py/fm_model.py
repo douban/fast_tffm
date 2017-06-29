@@ -91,7 +91,7 @@ class DistFmModel(FmModelBase):
 
 class LocalFmModel(FmModelBase):
   def main_ps_device(self):
-    return tf.device('/cpu:0')
+    return tf.device(None)
 
   def default_device(self):
-    return tf.device('/cpu:0')
+    return tf.device(None)

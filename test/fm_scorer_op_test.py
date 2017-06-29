@@ -50,7 +50,7 @@ class FmScorerOpTest(tf.test.TestCase):
     my_cost = tf.reduce_sum(tf.squared_difference(labels, my_pred)) + my_reg
     my_grad = tf.gradients(my_cost, params_var)
 
-    with self.test_session():
+    with self.test_session(config=tf.ConfigProto(log_device_placement=True)):
       tf.initialize_all_variables().run()
       self.assertAllClose(tf_pred.eval(), my_pred.eval())
       self.assertAllClose(tf_reg.eval(), my_reg.eval())
