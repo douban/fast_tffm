@@ -1,9 +1,6 @@
-import sys
-file_path = sys.path[0]
-sys.path.append(file_path + '/../py')
 import tensorflow as tf
 from tensorflow.python.platform import googletest
-from fm_ops import fm_ops
+from tffm.fm_ops import fm_ops
 
 
 class FmParserOpTest(tf.test.TestCase):
@@ -50,23 +47,38 @@ class FmParserOpTest(tf.test.TestCase):
 
     def testError(self):
         with self.test_session() as sess:
-            with self.assertRaisesRegexp(tf.errors.InvalidArgumentError, "Label could not be read in example: "):
-                fm_ops.fm_parser(
-                    tf.constant(["one 1:1 2:2 3:3 4:4"], tf.string),
-                    self.VOCAB_SIZE,
-                    False).labels.eval()
+            with self.assertRaisesRegexp(
+                tf.errors.InvalidArgumentError,
+                "Label could not be read in example: "
+            ):
+                sess.run(
+                    fm_ops.fm_parser(
+                        tf.constant(["one 1:1 2:2 3:3 4:4"], tf.string),
+                        self.VOCAB_SIZE, False
+                    )
+                )
 
-            with self.assertRaisesRegexp(tf.errors.InvalidArgumentError, "Invalid format in example: "):
-                fm_ops.fm_parser(
-                    tf.constant(["1 one:1 2:2 3:3 4:4"], tf.string),
-                    self.VOCAB_SIZE,
-                    False).feature_ids.eval()
+            with self.assertRaisesRegexp(
+                tf.errors.InvalidArgumentError,
+                "Invalid format in example: "
+            ):
+                sess.run(
+                    fm_ops.fm_parser(
+                        tf.constant(["1 one:1 2:2 3:3 4:4"], tf.string),
+                        self.VOCAB_SIZE, False
+                    )
+                )
 
-            with self.assertRaisesRegexp(tf.errors.InvalidArgumentError, "Invalid feature value. "):
-                fm_ops.fm_parser(
-                    tf.constant(["1 1:one 2:2 3:3 4:4"], tf.string),
-                    self.VOCAB_SIZE,
-                    False).feature_vals.eval()
+            with self.assertRaisesRegexp(
+                tf.errors.InvalidArgumentError,
+                "Invalid feature value. "
+            ):
+                sess.run(
+                    fm_ops.fm_parser(
+                        tf.constant(["1 1:one 2:2 3:3 4:4"], tf.string),
+                        self.VOCAB_SIZE, False
+                    )
+                )
 
 
 if __name__ == "__main__":

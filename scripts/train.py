@@ -4,7 +4,7 @@ import time
 import sys
 import ConfigParser
 import tensorflow as tf
-from py.fm_ops import fm_ops
+from tffm.fm_ops import fm_parser, fm_scorer
 import time
 
 
@@ -39,7 +39,7 @@ def read_my_file_format(train_file_queue, weight_file_queue, model_specs):
     if (weight_file_queue is not None):
         _, weight_line = weight_reader.read(weight_file_queue)
         weight = tf.string_to_number(weight_line, out_type=tf.float32)
-    label, feature_ids, feature_vals = fm_ops.fm_parser(
+    label, feature_ids, feature_vals = fm_parser(
         train_line, model_specs.vocabulary_size, model_specs.hash_feature_id)
     feature_ids = tf.reshape(feature_ids, [-1, 1])
     sparse_features = tf.SparseTensor(
@@ -97,7 +97,7 @@ def train(train_files, weight_files, model_specs):
 
         local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
 
-        pred_score, reg_score = fm_ops.fm_scorer(
+        pred_score, reg_score = fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses, model_specs.factor_lambda, model_specs.bias_lambda)
 
         if model_specs.loss_type == 'logistic':
