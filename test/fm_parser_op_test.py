@@ -22,11 +22,14 @@ class FmParserOpTest(tf.test.TestCase):
             self.assertAllClose(feature_vals, self.TARGET_FEATURE_VALS)
 
     def testWithHash(self):
-        parser_op = fm_ops.fm_parser(self.TRAIN_STRING, self.VOCAB_SIZE, False)
+        parser_op = fm_ops.fm_parser(self.TRAIN_STRING, self.VOCAB_SIZE, True)
+        string_ids = [str(x) for x in self.TARGET_FEATURE_IDS]
+        hashed_feature_ids = tf.string_to_hash_bucket(string_ids, self.VOCAB_SIZE)
         with self.test_session() as sess:
+            hashed_ids = sess.run(hashed_feature_ids)
             label, feature_ids, feature_vals = sess.run(parser_op)
             self.assertEqual(label, self.TARGET_LABEL)
-            self.assertAllEqual(feature_ids, self.TARGET_FEATURE_IDS)
+            self.assertAllEqual(feature_ids, hashed_ids)
             self.assertAllClose(feature_vals, self.TARGET_FEATURE_VALS)
 
     def testError(self):

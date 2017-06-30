@@ -66,12 +66,12 @@ class FmParserOp : public OpKernel {
     while (true) {
       if (sscanf(p, " %[^: ]%n", ori_id_str, &offset) != 1) break;
       if (hash_feature_id) {
-        ori_id = Hash64(ori_id_str, strlen(ori_id_str));
+        ori_id = Hash64(ori_id_str, strlen(ori_id_str)) % vocab_size;
       } else {
         ori_id = strtol(ori_id_str, &err, 10);
         OP_REQUIRES(ctx, *err == 0, errors::InvalidArgument("Invalid feature id ", ori_id_str, ". Set hash_feature_id = True?"))
+	OP_REQUIRES(ctx, ori_id >= 0 && ori_id < vocab_size, errors::InvalidArgument("Invalid feature id ", ori_id_str, ". Should be in range [0, vocabulary_size)."))
       }
-      ori_id = labs(ori_id % vocab_size);
       p += offset;
       if (*p == ':') {
         OP_REQUIRES(ctx, sscanf(p, ":%f%n", &fv, &offset) == 1, errors::InvalidArgument("Invalid feature value: ", ori_id_str))
