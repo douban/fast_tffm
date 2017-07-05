@@ -1,3 +1,4 @@
+from __future__ import print_function
 import glob
 import time
 import sys
@@ -7,8 +8,25 @@ from py.fm_ops import fm_ops
 import time
 
 
-class ModelSpecs:
-    pass
+class ModelSpecs(object):
+        vocabulary_size = 8000000
+        vocabulary_block_num = 100
+        factor_num = 100
+        hash_feature_id = False
+        log_file = './log'
+        batch_size = 50000
+        init_value_range = 0.01
+        factor_lambda = 0
+        bias_lambda = 0
+        thread_num = 10
+        epoch_num = 2
+        shuffle_batch_threads_num = 1
+        min_after_dequeue = 100
+        learning_rate = 0.01
+        adagrad_initial_accumulator = 0.1
+        loss_type = 'mse'
+        train_files = './data/train_*'
+        weight_files = './data/weight_*'
 
 
 def read_my_file_format(train_file_queue, weight_file_queue, model_specs):
@@ -22,10 +40,10 @@ def read_my_file_format(train_file_queue, weight_file_queue, model_specs):
         _, weight_line = weight_reader.read(weight_file_queue)
         weight = tf.string_to_number(weight_line, out_type=tf.float32)
     label, feature_ids, feature_vals = fm_ops.fm_parser(
-        train_line, ModelSpecs.vocabulary_size, ModelSpecs.hash_feature_id)
+        train_line, model_specs.vocabulary_size, model_specs.hash_feature_id)
     feature_ids = tf.reshape(feature_ids, [-1, 1])
     sparse_features = tf.SparseTensor(
-        feature_ids, feature_vals, [ModelSpecs.vocabulary_size])
+        feature_ids, feature_vals, [model_specs.vocabulary_size])
     label.set_shape([])
     return label, weight, sparse_features
 
@@ -33,17 +51,17 @@ def read_my_file_format(train_file_queue, weight_file_queue, model_specs):
 def input_pipeline(train_files, weight_files, model_specs):
     seed = time.time()
     train_file_queue = tf.train.string_input_producer(
-        train_files, num_epochs=ModelSpecs.num_epochs, shuffle=True, seed=seed)
+        train_files, num_epochs=model_specs.num_epochs, shuffle=True, seed=seed)
     weight_file_queue = tf.train.string_input_producer(
-        weight_files, num_epochs=ModelSpecs.num_epochs, shuffle=True, seed=seed)
+        weight_files, num_epochs=model_specs.num_epochs, shuffle=True, seed=seed)
 
     label, weight, sparse_features = read_my_file_format(
         train_file_queue, weight_file_queue, model_specs)
 
     # Batching Examples
-    capacity = ModelSpecs.min_after_dequeue + 3 * ModelSpecs.batch_size
+    capacity = model_specs.min_after_dequeue + 3 * model_specs.batch_size
     labels_batch, weights_batch, sparse_features_batch = tf.train.shuffle_batch(
-        [label, weight, sparse_features], batch_size=ModelSpecs.batch_size, capacity=capacity, min_after_dequeue=ModelSpecs.min_after_dequeue, num_threads=ModelSpecs.num_threads)
+        [label, weight, sparse_features], batch_size=model_specs.batch_size, capacity=capacity, min_after_dequeue=model_specs.min_after_dequeue, num_threads=model_specs.num_threads)
     return labels_batch, weights_batch, sparse_features_batch
 
 
@@ -51,17 +69,17 @@ def train(train_files, weight_files, model_specs):
 
     with tf.Graph().as_default():
         vocab_blocks = []
-        vocab_size_per_block = ModelSpecs.vocabulary_size / \
-            ModelSpecs.vocabulary_block_num + 1
-        init_value_range = ModelSpecs.init_value_range
+        vocab_size_per_block = model_specs.vocabulary_size / \
+            model_specs.vocabulary_block_num + 1
+        init_value_range = model_specs.init_value_range
 
-        for i in range(ModelSpecs.vocabulary_block_num):
+        for i in range(model_specs.vocabulary_block_num):
             vocab_blocks.append(
                 tf.Variable(
                     tf.random_uniform(
                         [
                             vocab_size_per_block,
-                            ModelSpecs.factor_num + 1],
+                            model_specs.factor_num + 1],
                         -init_value_range,
                         init_value_range),
                     name='vocab_block_%d' % i))
@@ -80,12 +98,12 @@ def train(train_files, weight_files, model_specs):
         local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
 
         pred_score, reg_score = fm_ops.fm_scorer(
-            feature_ids, local_params, feature_vals, feature_poses, ModelSpecs.factor_lambda, ModelSpecs.bias_lambda)
+            feature_ids, local_params, feature_vals, feature_poses, model_specs.factor_lambda, model_specs.bias_lambda)
 
-        if ModelSpecs.loss_type == 'logistic':
-            loss = tf.reduce_sum(weights * tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=pred_score, labels=labels_batch)) / ModelSpecs.batch_size
-        elif ModelSpecs.loss_type == 'mse':
+        if model_specs.loss_type == 'logistic':
+            loss = tf.reduce_mean(weights * tf.nn.sigmoid_cross_entropy_with_logits(
+                logits=pred_score, labels=labels_batch)) / model_specs.batch_size
+        elif model_specs.loss_type == 'mse':
             #loss = tf.losses.mean_squared_error(labels_batch, pred_score, weights_batch)
             loss = tf.reduce_mean(
                 weights_batch *
@@ -97,17 +115,18 @@ def train(train_files, weight_files, model_specs):
 
         global_step = tf.Variable(0, name='global_step', trainable=False)
         optimizer = tf.train.AdagradOptimizer(
-            ModelSpecs.learning_rate,
-            ModelSpecs.adagrad_init_accumulator)
+            model_specs.learning_rate,
+            model_specs.adagrad_init_accumulator)
         train_op = optimizer.minimize(
-            loss + reg_score / ModelSpecs.batch_size,
+            loss + reg_score / model_specs.batch_size,
             global_step=global_step)
 
-        sv = tf.train.Supervisor(logdir='log')
+        sv = tf.train.Supervisor(logdir=model_specs.log_file)
         with sv.managed_session() as sess:
             while not sv.should_stop():
-                sess.run(train_op)
-                print '-- Global Step: %d; Avg loss: %.5f;' % (global_step.eval(session=sess), loss.eval(session=sess))
+                _, loss_value, step_num = sess.run(
+                    [train_op, loss, global_step])
+                print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss_value))
 
 
 def main():
@@ -123,7 +142,7 @@ def main():
 
     config = ConfigParser.ConfigParser()
     _ = config.read(sys.argv[1])
-    model_specs = {}
+    model_specs = ModelSpecs()
 
     def read_config(section, option, not_null=True):
         if not config.has_option(section, option):
@@ -133,7 +152,7 @@ def main():
                 return None
         else:
             value = config.get(section, option)
-            print '  {0} = {1}'.format(option, value)
+            print('  {0} = {1}'.format(option, value))
             return value
 
     def read_strs_config(section, option, not_null=True):
@@ -142,44 +161,45 @@ def main():
             return [s.strip() for s in val.split(STR_DELIMITER)]
         return None
 
-    print 'Config: '
-    ModelSpecs.factor_num = int(read_config(
-        GENERAL_SECTION, 'factor_num'))
-    ModelSpecs.vocabulary_size = int(read_config(
+    print('Config: ')
+    model_specs.vocabulary_size = int(read_config(
         GENERAL_SECTION, 'vocabulary_size'))
-    ModelSpecs.vocabulary_block_num = int(read_config(
+    model_specs.vocabulary_block_num = int(read_config(
         GENERAL_SECTION, 'vocabulary_block_num'))
-    ModelSpecs.hash_feature_id = read_config(
+    model_specs.factor_num = int(read_config(
+        GENERAL_SECTION, 'factor_num'))
+    model_specs.hash_feature_id = read_config(
         GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
+    model_specs.log_file = read_config(GENERAL_SECTION, 'log_file')
 
-    ModelSpecs.batch_size = int(read_config(TRAIN_SECTION, 'batch_size'))
-    ModelSpecs.init_value_range = float(
+    model_specs.batch_size = int(read_config(TRAIN_SECTION, 'batch_size'))
+    model_specs.init_value_range = float(
         read_config(TRAIN_SECTION, 'init_value_range'))
-    ModelSpecs.factor_lambda = float(
+    model_specs.factor_lambda = float(
         read_config(TRAIN_SECTION, 'factor_lambda'))
-    ModelSpecs.bias_lambda = float(read_config(TRAIN_SECTION, 'bias_lambda'))
-    ModelSpecs.num_threads = int(read_config(TRAIN_SECTION, 'thread_num'))
-    ModelSpecs.num_epochs = int(read_config(TRAIN_SECTION, 'epoch_num'))
-    ModelSpecs.shuffle_batch_threads_num = int(
+    model_specs.bias_lambda = float(read_config(TRAIN_SECTION, 'bias_lambda'))
+    model_specs.num_threads = int(read_config(TRAIN_SECTION, 'thread_num'))
+    model_specs.num_epochs = int(read_config(TRAIN_SECTION, 'epoch_num'))
+    model_specs.shuffle_batch_threads_num = int(
         read_config(TRAIN_SECTION, 'shuffle_batch_threads_num'))
-    ModelSpecs.min_after_dequeue = int(
+    model_specs.min_after_dequeue = int(
         read_config(TRAIN_SECTION, 'min_after_dequeue'))
-    ModelSpecs.learning_rate = float(
+    model_specs.learning_rate = float(
         read_config(TRAIN_SECTION, 'learning_rate'))
-    ModelSpecs.adagrad_init_accumulator = float(
+    model_specs.adagrad_init_accumulator = float(
         read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
-    ModelSpecs.loss_type = read_config(
+    model_specs.loss_type = read_config(
         TRAIN_SECTION, 'loss_type').strip().lower()
-    if ModelSpecs.loss_type not in ['logistic', 'mse']:
+    if model_specs.loss_type not in ['logistic', 'mse']:
         raise ValueError('Unsupported loss type: %s' % loss_type)
 
     train_files = read_strs_config(TRAIN_SECTION, 'train_files')
-    train_files = sum((glob.glob(f) for f in train_files), [])
+    train_files = sorted(sum((glob.glob(f) for f in train_files), []))
     weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
     if weight_files is not None:
         if not isinstance(weight_files, list):
             weight_files = [weight_files]
-        weight_files = sum((glob.glob(f) for f in weight_files), [])
+        weight_files = sorted(sum((glob.glob(f) for f in weight_files), []))
     if len(train_files) != len(weight_files):
         raise ValueError(
             'The numbers of train files and weight files do not match.')
