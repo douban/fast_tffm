@@ -27,75 +27,6 @@ using namespace tensorflow;
 using fm::generator::FactorSumGenerator;
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
-typedef Eigen::GpuDevice GPUDevice;
-
-namespace fm {
-
-namespace functor {
-
-template<>
-void FmGrad<CPUDevice>::operator() (
-  const CPUDevice& d,
-  const typename TTypes<int32>::ConstTensor& feature_ids,
-  const typename TTypes<float, 2>::ConstTensor& feature_params,
-  const typename TTypes<float>::ConstTensor& feature_vals,
-  const typename TTypes<int32>::ConstTensor& feature_poses,
-  const typename TTypes<float>::ConstScalar& factor_lambda,
-  const typename TTypes<float>::ConstScalar& bias_lambda,
-  const typename TTypes<float>::ConstTensor& pred_grad,
-  const typename TTypes<float>::ConstScalar& reg_grad,
-  const int64 batch_size,
-  const int64 factor_num,
-  typename TTypes<float, 2>::Tensor& factor_sum,
-  typename TTypes<float>::Tensor& scratch,
-  typename TTypes<float, 2>::Tensor& param_grad
-) const {
-  FactorSumGenerator<CPUDevice> factor_sum_gen(
-    feature_poses, feature_ids, feature_vals, feature_params, factor_num
-  );
-  factor_sum = factor_sum.generate(factor_sum_gen);
-
-  for (size_t i = 0; i < batch_size; ++i) {
-    for (size_t j = feature_poses(i); j < feature_poses(i + 1); ++j) {
-      auto fid = feature_ids(j);
-      auto fval = feature_vals(j);
-      for (size_t k = 0; k < factor_num + 1; ++k) {
-        float t = feature_params(fid, k);
-        if (k == 0) {
-          param_grad(fid, k) += pred_grad(i) * fval + reg_grad() * bias_lambda() * t;
-        } else {
-          param_grad(fid, k) += reg_grad() * factor_lambda() * t - pred_grad(i) * fval * fval * t;
-          param_grad(fid, k) += pred_grad(i) * fval * factor_sum(i, k - 1);
-        }
-      }
-    }
-  }
-}
-
-#ifdef WITH_CUDA
-template<>
-void FmGrad<GPUDevice>::operator() (
-  const GPUDevice& d,
-  const typename TTypes<int32>::ConstTensor& feature_ids,
-  const typename TTypes<float, 2>::ConstTensor& feature_params,
-  const typename TTypes<float>::ConstTensor& feature_vals,
-  const typename TTypes<int32>::ConstTensor& feature_poses,
-  const typename TTypes<float>::ConstScalar& factor_lambda,
-  const typename TTypes<float>::ConstScalar& bias_lambda,
-  const typename TTypes<float>::ConstTensor& pred_grad,
-  const typename TTypes<float>::ConstScalar& reg_grad,
-  const int64 batch_size,
-  const int64 factor_num,
-  typename TTypes<float, 2>::Tensor& factor_sum,
-  typename TTypes<float>::Tensor& scratch,
-  typename TTypes<float, 2>::Tensor& param_grad
-) const;
-extern template struct FmGrad<GPUDevice>;
-#endif
-
-}
-
-}
 
 template<typename Device>
 class FmGradOp : public OpKernel {
@@ -141,11 +72,7 @@ class FmGradOp : public OpKernel {
     auto factor_sum = factor_sum_tensor.matrix<float>();
 
     Tensor scratch_tensor;
-    if (std::is_same<Device, GPUDevice>::value) {
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, TensorShape({factor_num}), &scratch_tensor));
-    } else {
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, TensorShape({0}), &scratch_tensor));
-    }
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, TensorShape({factor_num + 1}), &scratch_tensor));
     auto scratch = scratch_tensor.flat<float>();
 
     fm::functor::FmGrad<Device> functor;
@@ -159,7 +86,35 @@ class FmGradOp : public OpKernel {
 };
 
 REGISTER_KERNEL_BUILDER(Name("FmGrad").Device(DEVICE_CPU), FmGradOp<CPUDevice>);
+
 #ifdef WITH_CUDA
+typedef Eigen::GpuDevice GPUDevice;
+
+namespace fm {
+namespace functor {
+
+template<>
+void FmGrad<GPUDevice>::operator() (
+  const GPUDevice& d,
+  const typename TTypes<int32>::ConstTensor& feature_ids,
+  const typename TTypes<float, 2>::ConstTensor& feature_params,
+  const typename TTypes<float>::ConstTensor& feature_vals,
+  const typename TTypes<int32>::ConstTensor& feature_poses,
+  const typename TTypes<float>::ConstScalar& factor_lambda,
+  const typename TTypes<float>::ConstScalar& bias_lambda,
+  const typename TTypes<float>::ConstTensor& pred_grad,
+  const typename TTypes<float>::ConstScalar& reg_grad,
+  const int64 batch_size,
+  const int64 factor_num,
+  typename TTypes<float, 2>::Tensor& factor_sum,
+  typename TTypes<float>::Tensor& scratch,
+  typename TTypes<float, 2>::Tensor& param_grad
+) const;
+extern template struct FmGrad<GPUDevice>;
+
+}
+}
+
 REGISTER_KERNEL_BUILDER(Name("FmGrad").Device(DEVICE_GPU), FmGradOp<GPUDevice>);
 #endif
 

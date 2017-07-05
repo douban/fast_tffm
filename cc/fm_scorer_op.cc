@@ -20,7 +20,6 @@ using namespace tensorflow;
 using fm::functor::FmScorer;
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
-typedef Eigen::GpuDevice GPUDevice;
 
 template <typename Device>
 class FmScorerOp : public OpKernel {
@@ -76,7 +75,12 @@ class FmScorerOp : public OpKernel {
   }
 };
 
+
+REGISTER_KERNEL_BUILDER(Name("FmScorer").Device(DEVICE_CPU), FmScorerOp<CPUDevice>);
+
 #ifdef WITH_CUDA
+typedef Eigen::GpuDevice GPUDevice;
+
 namespace fm {
 namespace functor {
   template<>
@@ -99,10 +103,7 @@ extern template struct FmScorer<GPUDevice>;
 
 }
 }
-#endif
 
-REGISTER_KERNEL_BUILDER(Name("FmScorer").Device(DEVICE_CPU), FmScorerOp<CPUDevice>);
-#ifdef WITH_CUDA
 REGISTER_KERNEL_BUILDER(Name("FmScorer").Device(DEVICE_GPU), FmScorerOp<GPUDevice>);
 #endif
 
