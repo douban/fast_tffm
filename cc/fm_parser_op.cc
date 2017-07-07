@@ -6,8 +6,9 @@
 #include <fstream>
 
 REGISTER_OP("FmParser")
-  .Input("data_string: string")
-  .Output("label: float32")
+  .Input("data_strings: string")
+  .Output("labels: float32")
+  .Output("sizes: int32")
   .Output("feature_ids: int64")
   .Output("feature_vals: float32")
   .Attr("vocab_size: int")
@@ -26,23 +27,27 @@ class FmParserOp : public OpKernel {
     }
 
     void Compute(OpKernelContext* ctx) override {
-      const Tensor* data_string_tensor;
-      OP_REQUIRES_OK(ctx, ctx->input("data_string", &data_string_tensor));
-      auto data_string = data_string_tensor->scalar<string>()(); 
+      const Tensor* data_strings_tensor;
+      OP_REQUIRES_OK(ctx, ctx->input("data_strings", &data_strings_tensor));
+      auto batch_size = data_strings_tensor->dim_size(0);
+      auto data_strings = data_strings_tensor->flat<string>();
 
-      float label_val;
+      std::vector<float> labels;
+      std::vector<int32> sizes;
       std::vector<int64> feature_ids;
       std::vector<float> feature_vals;
-      ParseLine(ctx, data_string, hash_feature_id_, vocab_size_, label_val, feature_ids, feature_vals);
+      for(int32 i=0; i < batch_size; ++i) {
+        const string& data_string = data_strings(i);
+        ParseLine(
+          ctx, data_string, hash_feature_id_, vocab_size_,
+          labels, sizes, feature_ids, feature_vals
+        );
+      }
 
-      Tensor* label_tensor;
-      OP_REQUIRES_OK(ctx, ctx->allocate_output("label", TensorShape({}), &label_tensor));
-      auto label = label_tensor->scalar<float>();
-      label() = label_val;
-
-
+      AllocateTensorForVector<float>(ctx, "labels", labels);
+      AllocateTensorForVector<int32>(ctx, "sizes", sizes);
       AllocateTensorForVector<int64>(ctx, "feature_ids", feature_ids);
-      AllocateTensorForVector<float>(ctx, "feature_vals", feature_vals); 
+      AllocateTensorForVector<float>(ctx, "feature_vals", feature_vals);
     }
 
 
@@ -50,38 +55,57 @@ class FmParserOp : public OpKernel {
     int64 vocab_size_;
     bool hash_feature_id_;
 
-    void ParseLine(OpKernelContext* ctx, std::basic_string<char>& line, bool& hash_feature_id, int64& vocab_size, float& label, std::vector<int64>& feature_ids, std::vector<float>& feature_vals) {
+    void ParseLine(
+      OpKernelContext* ctx, const std::string& line,
+      bool& hash_feature_id, int64& vocab_size, std::vector<float>& labels,
+      std::vector<int32>& sizes, std::vector<int64>& feature_ids,
+      std::vector<float>& feature_vals
+    ) {
       const char* p = line.c_str();
+      char* nextptr;
       float fv;
       int64 ori_id;
-      int offset;
-      OP_REQUIRES(ctx, sscanf(p, "%f%n", &fv, &offset) == 1,
+      int32 cnt;
+      fv = strtof(p, &nextptr);
+      OP_REQUIRES(ctx, p != nextptr,
           errors::InvalidArgument("Label could not be read in example: ", line));
-      label = fv;
-      p += offset;
+      labels.push_back(fv);
+      p = nextptr;
 
-      size_t read_size;
-      char ori_id_str[MAX_FEATURE_ID_LENGTH];
-      char* err;
-      while (true) {
-        if (sscanf(p, " %[^: ]%n", ori_id_str, &offset) != 1) break;
-        if (hash_feature_id) {
-          ori_id = Hash64(ori_id_str, strlen(ori_id_str)) % vocab_size;
-        } else {
-          ori_id = strtol(ori_id_str, &err, 10);
-          OP_REQUIRES(ctx, *err == 0, errors::InvalidArgument("Invalid feature id ", ori_id_str, ". Set hash_feature_id = True?"))
-          OP_REQUIRES(ctx, ori_id >= 0 && ori_id < vocab_size, errors::InvalidArgument("Invalid feature id ", ori_id_str, ". Should be in range [0, vocabulary_size)."))
+      for (cnt = 0; *p != '\0'; ++cnt) {
+        OP_REQUIRES(ctx, *p == ' ',
+          errors::InvalidArgument("Invalid format in example: ", line));
+        ++ p;
+        if (*p == '\0') {
+          break;
         }
-        p += offset;
+        if (hash_feature_id) {
+          for(nextptr = (char*)p; *nextptr != ' ' || *nextptr != ':' || *nextptr != '\0'; ++nextptr) ;
+          ori_id = Hash64(p, nextptr - p) % vocab_size;
+        } else {
+          ori_id = strtoll(p, &nextptr, 10);
+          OP_REQUIRES(ctx, p != nextptr,
+            errors::InvalidArgument("Invalid format in example: ", line));
+          OP_REQUIRES(ctx, ori_id >= 0 && ori_id < vocab_size,
+            errors::InvalidArgument(
+              "Invalid feature id. Should be in range [0, vocabulary_size).", line
+            )
+          )
+        }
+        p = nextptr;
         if (*p == ':') {
-          OP_REQUIRES(ctx, sscanf(p, ":%f%n", &fv, &offset) == 1, errors::InvalidArgument("Invalid feature value: ", ori_id_str))
-            p += offset;
+          p += 1;
+          fv = strtof(p, &nextptr);
+          OP_REQUIRES(ctx, p != nextptr,
+            errors::InvalidArgument("Invalid feature value. ", line))
+          p = nextptr;
         } else {
           fv = 1;
         }
         feature_ids.push_back(ori_id);
         feature_vals.push_back(fv);
       }
+      sizes.push_back(cnt);
     }
 
 
