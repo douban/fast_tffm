@@ -80,7 +80,7 @@ class FmParserOp : public OpKernel {
           break;
         }
         if (hash_feature_id) {
-          for(nextptr = (char*)p; *nextptr != ' ' || *nextptr != ':' || *nextptr != '\0'; ++nextptr) ;
+          for(nextptr = (char*)p; *nextptr != ' ' && *nextptr != ':' && *nextptr != '\0'; ++nextptr) ;
           ori_id = Hash64(p, nextptr - p) % vocab_size;
         } else {
           ori_id = strtoll(p, &nextptr, 10);
