@@ -1,0 +1,16 @@
+- job:
+    name: fast_tffm
+    scm:
+      - git:
+          branches:
+            - master
+          skip-tag: True
+          url: http://github.intra.douban.com/coresys/fast_tffm.git
+    builders:
+      - shell: |
+            rm -rf venv
+            virtualenv venv
+            venv/bin/pip install tensorflow
+            venv/bin/python setup.py develop
+            venv/bin/python setup.py test
+            flake8
