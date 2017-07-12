@@ -54,6 +54,8 @@ if CUDA_TOOLKIT_ROOT is not None:
         '-L', os.path.join(CUDA_TOOLKIT_ROOT, 'lib64'), '-l', 'cudart_static'
     ])
     sources.extend(glob('cc/*.cu'))
+    CFLAGS.append('-DWITH_CUDA')
+    NVCCFLAGS.append('-DWITH_CUDA')
 else:
     warnings.warn('NO CUDA Found! Disable GPU kernels!', Warning)
 

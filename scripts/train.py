@@ -1,68 +1,100 @@
 from __future__ import print_function
+import sys
+file_path = sys.path[0]
+sys.path.append(file_path + '/../')
 import glob
 import time
 import sys
 import ConfigParser
 import tensorflow as tf
-from tffm.fm_ops import fm_parser, fm_scorer
 import time
+from tffm.fm_ops import fm_ops
+from tensorflow.python.client import timeline
 
 
 class ModelSpecs(object):
-        vocabulary_size = 8000000
-        vocabulary_block_num = 100
-        factor_num = 100
-        hash_feature_id = False
-        log_file = './log'
-        batch_size = 50000
-        init_value_range = 0.01
-        factor_lambda = 0
-        bias_lambda = 0
-        thread_num = 10
-        epoch_num = 2
-        shuffle_batch_threads_num = 1
-        min_after_dequeue = 100
-        learning_rate = 0.01
-        adagrad_initial_accumulator = 0.1
-        loss_type = 'mse'
-        train_files = './data/train_*'
-        weight_files = './data/weight_*'
+    vocabulary_size = 8000000
+    vocabulary_block_num = 100
+    factor_num = 10
+    hash_feature_id = False
+    log_file = './log'
+    batch_size = 50000
+    init_value_range = 0.01
+    factor_lambda = 0
+    bias_lambda = 0
+    learning_rate = 0.01
+    adagrad_initial_accumulator = 0.1
+    num_epochs = 10
+    loss_type = 'mse'
+    queue_size = 10000
+    shuffle_threads = 6
+    ratio = 4
 
 
-def read_my_file_format(train_file_queue, weight_file_queue, model_specs):
+def shuffle_input(
+        thread_idx,
+        model_specs,
+        train_file_queue,
+        weight_file_queue,
+        ex_q):
+    with tf.name_scope("shuffled_%s" % (thread_idx,)):
+        train_reader = tf.TextLineReader()
+        weight_reader = tf.TextLineReader()
+        _, data_lines = train_reader.read_up_to(
+            train_file_queue, model_specs.batch_size)
+        _, weight_lines = weight_reader.read_up_to(
+            weight_file_queue, model_specs.batch_size)
 
-    train_reader = tf.TextLineReader()
-    weight_reader = tf.TextLineReader()
+        min_after_dequeue = 3 * model_specs.batch_size
+        capacity = int(min_after_dequeue + model_specs.batch_size * 1.5)
+        data_lines_batch, weight_lines_batch = tf.train.shuffle_batch(
+            [data_lines, weight_lines], model_specs.batch_size, capacity, min_after_dequeue, enqueue_many=True)
 
-    _, train_line = train_reader.read(train_file_queue)
-    weight = tf.constant(1.0, dtype=tf.float32)
-    if (weight_file_queue is not None):
-        _, weight_line = weight_reader.read(weight_file_queue)
-        weight = tf.string_to_number(weight_line, out_type=tf.float32)
-    label, feature_ids, feature_vals = fm_parser(
-        train_line, model_specs.vocabulary_size, model_specs.hash_feature_id)
-    feature_ids = tf.reshape(feature_ids, [-1, 1])
-    sparse_features = tf.SparseTensor(
-        feature_ids, feature_vals, [model_specs.vocabulary_size])
-    label.set_shape([])
-    return label, weight, sparse_features
+        weights = tf.string_to_number(weight_lines_batch, tf.float32)
+        labels, sizes, feature_ids, feature_vals = fm_ops.fm_parser(
+            data_lines_batch, model_specs.vocabulary_size)
+        ori_ids, feature_ids = tf.unique(feature_ids)
+        feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
+
+        enq = ex_q.enqueue([labels, weights, feature_ids,
+                            ori_ids, feature_vals, feature_poses])
+        return [enq] * model_specs.ratio
 
 
 def input_pipeline(train_files, weight_files, model_specs):
     seed = time.time()
+
     train_file_queue = tf.train.string_input_producer(
-        train_files, num_epochs=model_specs.num_epochs, shuffle=True, seed=seed)
+        train_files,
+        num_epochs=model_specs.num_epochs,
+        shared_name="train_file_queue",
+        shuffle=True,
+        seed=seed)
     weight_file_queue = tf.train.string_input_producer(
-        weight_files, num_epochs=model_specs.num_epochs, shuffle=True, seed=seed)
+        weight_files,
+        num_epochs=model_specs.num_epochs,
+        shared_name="weight_file_queue",
+        shuffle=True,
+        seed=seed)
 
-    label, weight, sparse_features = read_my_file_format(
-        train_file_queue, weight_file_queue, model_specs)
+    example_queue = tf.FIFOQueue(
+        model_specs.queue_size, [
+            tf.float32, tf.float32, tf.int32, tf.int64, tf.float32, tf.int32])
+    enqueue_ops = sum(
+        (shuffle_input(
+            i,
+            model_specs,
+            train_file_queue,
+            weight_file_queue,
+            example_queue) for i in range(
+            model_specs.shuffle_threads)),
+        [])
+    tf.train.add_queue_runner(tf.train.QueueRunner(example_queue, enqueue_ops))
 
-    # Batching Examples
-    capacity = model_specs.min_after_dequeue + 3 * model_specs.batch_size
-    labels_batch, weights_batch, sparse_features_batch = tf.train.shuffle_batch(
-        [label, weight, sparse_features], batch_size=model_specs.batch_size, capacity=capacity, min_after_dequeue=model_specs.min_after_dequeue, num_threads=model_specs.num_threads)
-    return labels_batch, weights_batch, sparse_features_batch
+    labels, weights, feature_ids, ori_ids, feature_vals, feature_poses = example_queue.dequeue()
+    exq_size = example_queue.size()
+
+    return exq_size, labels, weights, feature_ids, ori_ids, feature_vals, feature_poses
 
 
 def train(train_files, weight_files, model_specs):
@@ -84,32 +116,25 @@ def train(train_files, weight_files, model_specs):
                         init_value_range),
                     name='vocab_block_%d' % i))
 
-        labels_batch, weights_batch, sparse_features_batch = input_pipeline(
+        exq_size, labels, weights, feature_ids, ori_ids, feature_vals, feature_poses = input_pipeline(
             train_files, weight_files, model_specs)
-
-        inds = sparse_features_batch.indices
-        feature_vals = sparse_features_batch.values
-
-        ori_ids, feature_ids = tf.unique(
-            tf.squeeze(tf.slice(inds, [0, 1], [-1, 1])))
-        feature_poses = tf.concat([[0], tf.cumsum(tf.bincount(
-            tf.cast(tf.slice(inds, [0, 0], [-1, 1]), tf.int32)))], 0)
-
         local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
 
-        pred_score, reg_score = fm_scorer(
+        pred_score, reg_score = fm_ops.fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses, model_specs.factor_lambda, model_specs.bias_lambda)
 
         if model_specs.loss_type == 'logistic':
-            loss = tf.reduce_mean(weights * tf.nn.sigmoid_cross_entropy_with_logits(
-                logits=pred_score, labels=labels_batch)) / model_specs.batch_size
+            loss = tf.reduce_mean(
+                weights * tf.nn.sigmoid_cross_entropy_with_logits(
+                    logits=pred_score,
+                    labels=labels)) / model_specs.batch_size
         elif model_specs.loss_type == 'mse':
             #loss = tf.losses.mean_squared_error(labels_batch, pred_score, weights_batch)
             loss = tf.reduce_mean(
-                weights_batch *
+                weights *
                 tf.square(
                     pred_score -
-                    labels_batch))
+                    labels))
         else:
             loss = None
 
@@ -121,12 +146,46 @@ def train(train_files, weight_files, model_specs):
             loss + reg_score / model_specs.batch_size,
             global_step=global_step)
 
+        min_after_dequeue = 3 * model_specs.batch_size
+        capacity = int(min_after_dequeue + model_specs.batch_size * 1.5)
+
+        run_metadata = tf.RunMetadata()
         sv = tf.train.Supervisor(logdir=model_specs.log_file)
+        t0 = time.time()
         with sv.managed_session() as sess:
             while not sv.should_stop():
-                _, loss_value, step_num = sess.run(
-                    [train_op, loss, global_step])
-                print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss_value))
+                cur = time.time()
+                _, loss_value, step_num, exq_size_value = sess.run(
+                    [
+                        train_op, loss, global_step, exq_size], options=tf.RunOptions(
+                        trace_level=tf.RunOptions.FULL_TRACE), run_metadata=run_metadata)
+                tend = time.time()
+                shuffleq_size = sum(
+                    sess.run(
+                        [
+                            'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0' %
+                            i for i in range(
+                                model_specs.shuffle_threads)]))
+                print(
+                    '-- Global Step: %d; Avg loss: %.5f;' %
+                    (step_num, loss_value))
+                print('speed:', model_specs.batch_size /
+                      (tend -
+                       cur), 'shuffle_queue: %.2f%%' %
+                      (shuffleq_size *
+                       100.0 /
+                       (capacity *
+                        model_specs.shuffle_threads)), shuffleq_size, 'example_queue: %.2f%%' %
+                      (exq_size_value *
+                          100.0 /
+                          model_specs.queue_size))
+
+            print('Average speed: ', step_num *
+                  model_specs.batch_size / (tend - t0), ' examples/s')
+
+        trace_file = open('./timeline', 'w')
+        trace = timeline.Timeline(step_stats=run_metadata.step_stats)
+        trace_file.write(trace.generate_chrome_trace_format())
 
 
 def main():
@@ -178,12 +237,7 @@ def main():
     model_specs.factor_lambda = float(
         read_config(TRAIN_SECTION, 'factor_lambda'))
     model_specs.bias_lambda = float(read_config(TRAIN_SECTION, 'bias_lambda'))
-    model_specs.num_threads = int(read_config(TRAIN_SECTION, 'thread_num'))
     model_specs.num_epochs = int(read_config(TRAIN_SECTION, 'epoch_num'))
-    model_specs.shuffle_batch_threads_num = int(
-        read_config(TRAIN_SECTION, 'shuffle_batch_threads_num'))
-    model_specs.min_after_dequeue = int(
-        read_config(TRAIN_SECTION, 'min_after_dequeue'))
     model_specs.learning_rate = float(
         read_config(TRAIN_SECTION, 'learning_rate'))
     model_specs.adagrad_init_accumulator = float(
@@ -192,6 +246,16 @@ def main():
         TRAIN_SECTION, 'loss_type').strip().lower()
     if model_specs.loss_type not in ['logistic', 'mse']:
         raise ValueError('Unsupported loss type: %s' % loss_type)
+
+    if config.has_option(TRAIN_SECTION, 'queue_size'):
+        model_specs.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
+    if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
+        model_specs.queue_size = int(
+            read_config(
+                TRAIN_SECTION,
+                'shuffle_threads'))
+    if config.has_option(TRAIN_SECTION, 'ratio'):
+        model_specs.queue_size = int(read_config(TRAIN_SECTION, 'ration'))
 
     train_files = read_strs_config(TRAIN_SECTION, 'train_files')
     train_files = sorted(sum((glob.glob(f) for f in train_files), []))
