@@ -1,14 +1,11 @@
 from __future__ import print_function
-import sys
-file_path = sys.path[0]
-sys.path.append(file_path + '/../')
 import glob
 import time
 import sys
 import ConfigParser
 import tensorflow as tf
 import time
-from tffm.fm_ops import fm_ops
+from tffm.fm_ops import fm_parser, fm_scorer
 from tensorflow.python.client import timeline
 
 
@@ -27,7 +24,7 @@ class ModelSpecs(object):
     num_epochs = 10
     loss_type = 'mse'
     queue_size = 10000
-    shuffle_threads = 6
+    shuffle_threads = 1
     ratio = 4
 
 
@@ -51,7 +48,7 @@ def shuffle_input(
             [data_lines, weight_lines], model_specs.batch_size, capacity, min_after_dequeue, enqueue_many=True)
 
         weights = tf.string_to_number(weight_lines_batch, tf.float32)
-        labels, sizes, feature_ids, feature_vals = fm_ops.fm_parser(
+        labels, sizes, feature_ids, feature_vals = fm_parser(
             data_lines_batch, model_specs.vocabulary_size)
         ori_ids, feature_ids = tf.unique(feature_ids)
         feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
@@ -120,7 +117,7 @@ def train(train_files, weight_files, model_specs):
             train_files, weight_files, model_specs)
         local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
 
-        pred_score, reg_score = fm_ops.fm_scorer(
+        pred_score, reg_score = fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses, model_specs.factor_lambda, model_specs.bias_lambda)
 
         if model_specs.loss_type == 'logistic':
@@ -250,12 +247,12 @@ def main():
     if config.has_option(TRAIN_SECTION, 'queue_size'):
         model_specs.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
     if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
-        model_specs.queue_size = int(
+        model_specs.shuffle_threads = int(
             read_config(
                 TRAIN_SECTION,
                 'shuffle_threads'))
     if config.has_option(TRAIN_SECTION, 'ratio'):
-        model_specs.queue_size = int(read_config(TRAIN_SECTION, 'ration'))
+        model_specs.ratio = int(read_config(TRAIN_SECTION, 'ration'))
 
     train_files = read_strs_config(TRAIN_SECTION, 'train_files')
     train_files = sorted(sum((glob.glob(f) for f in train_files), []))
