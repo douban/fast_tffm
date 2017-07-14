@@ -182,5 +182,5 @@ setup(
         'test': PyTest,
         'build_ext': TFBuild
     },
-    scripts=glob('scripts/*')
+    scripts=['train.py']
 )
