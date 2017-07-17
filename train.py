@@ -1,11 +1,11 @@
 from __future__ import print_function
-import sys
 import glob
 import time
 import ConfigParser
 import tensorflow as tf
 from tffm.fm_ops import fm_parser, fm_scorer
 from tensorflow.python.client import timeline
+import argparse
 
 
 class ModelSpecs(object):
@@ -107,7 +107,7 @@ def input_pipeline(train_files, weight_files, model_specs):
     )
 
 
-def train(train_files, weight_files, model_specs):
+def train(train_files, weight_files, model_specs, trace, monitor):
 
     with tf.Graph().as_default():
         vocab_blocks = []
@@ -165,69 +165,80 @@ def train(train_files, weight_files, model_specs):
         capacity = int(min_after_dequeue + model_specs.batch_size * 1.5)
 
         run_metadata = tf.RunMetadata()
-        sv = tf.train.Supervisor(logdir=model_specs.log_file)
-        t0 = time.time()
+        sv = tf.train.Supervisor(saver=None)
+        first_iter = True
+        ttotal = 0
         with sv.managed_session() as sess:
+            step_num = 0
             while not sv.should_stop():
                 cur = time.time()
-                _, loss_value, step_num, exq_size_value = sess.run(
-                    [train_op, loss, global_step, exq_size],
-                    options=tf.RunOptions(
-                        trace_level=tf.RunOptions.FULL_TRACE
-                    ),
-                    run_metadata=run_metadata
-                )
+                if first_iter and trace:
+                    first_iter = False
+                    _, loss_value, step_num, exq_size_value = sess.run(
+                        [train_op, loss, global_step, exq_size],
+                        options=tf.RunOptions(
+                            trace_level=tf.RunOptions.FULL_TRACE
+                        ),
+                        run_metadata=run_metadata
+                    )
+                else:
+                    _, loss_value, step_num, exq_size_value = sess.run(
+                        [train_op, loss, global_step, exq_size]
+                    )
+
                 tend = time.time()
-                queue_size_tpl = (
-                    'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0'
-                )
-                shuffleq_size = sum(
-                    sess.run([
-                        queue_size_tpl % i
-                        for i in range(model_specs.shuffle_threads)
-                    ])
-                )
+                ttotal = ttotal + tend - cur
+
+                if monitor:
+                    queue_size_tpl = (
+                        'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0'
+                    )
+                    shuffleq_size = sum(
+                        sess.run([
+                            queue_size_tpl % i
+                            for i in range(model_specs.shuffle_threads)
+                        ])
+                    )
+
+                    print(
+                        'speed:',
+                        model_specs.batch_size / (tend - cur),
+                        'shuffle_queue: %.2f%%' % (
+                            shuffleq_size * 100.0 / (
+                                capacity * model_specs.shuffle_threads
+                            )
+                        ),
+                        shuffleq_size,
+                        'example_queue: %.2f%%' % (
+                            exq_size_value * 100.0 / model_specs.queue_size
+                        )
+                    )
+
                 print(
                     '-- Global Step: %d; Avg loss: %.5f;' % (
                         step_num, loss_value
                     )
                 )
-                print(
-                    'speed:',
-                    model_specs.batch_size / (tend - cur),
-                    'shuffle_queue: %.2f%%' % (
-                        shuffleq_size * 100.0 / (
-                            capacity * model_specs.shuffle_threads
-                        )
-                    ),
-                    shuffleq_size,
-                    'example_queue: %.2f%%' % (
-                        exq_size_value * 100.0 / model_specs.queue_size
-                    )
-                )
 
-            print(
-                'Average speed: ',
-                step_num * model_specs.batch_size / (tend - t0),
-                ' examples/s'
-            )
+        print(
+            'Average speed: ',
+            step_num * model_specs.batch_size / ttotal,
+            ' examples/s'
+        )
 
-        trace_file = open('./timeline', 'w')
-        trace = timeline.Timeline(step_stats=run_metadata.step_stats)
-        trace_file.write(trace.generate_chrome_trace_format())
+        if trace:
+            with open('./timeline', 'w') as trace_file:
+                trace = timeline.Timeline(step_stats=run_metadata.step_stats)
+                trace_file.write(trace.generate_chrome_trace_format())
 
 
-def main():
-    if len(sys.argv) != 2:
-        sys.stderr.write("Missing config file path")
-        exit()
-
+def get_config(config_file):
     GENERAL_SECTION = 'General'
     TRAIN_SECTION = 'Train'
     STR_DELIMITER = ','
 
     config = ConfigParser.ConfigParser()
-    config.read(sys.argv[1])
+    config.read(config_file)
     model_specs = ModelSpecs()
 
     def read_config(section, option, not_null=True):
@@ -281,7 +292,7 @@ def main():
             read_config(TRAIN_SECTION, 'shuffle_threads')
         )
     if config.has_option(TRAIN_SECTION, 'ratio'):
-        model_specs.ratio = int(read_config(TRAIN_SECTION, 'ration'))
+        model_specs.ratio = int(read_config(TRAIN_SECTION, 'ratio'))
 
     train_files = read_strs_config(TRAIN_SECTION, 'train_files')
     train_files = sorted(sum((glob.glob(f) for f in train_files), []))
@@ -293,8 +304,32 @@ def main():
     if len(train_files) != len(weight_files):
         raise ValueError(
             'The numbers of train files and weight files do not match.')
+    return train_files, weight_files, model_specs
 
-    train(train_files, weight_files, model_specs)
+
+def main():
+    '''
+    if len(sys.argv) != 2:
+        sys.stderr.write("Missing config file path")
+        exit()
+    '''
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config_file", type=str)
+    parser.add_argument(
+        "-t",
+        "--trace",
+        action="store_true",
+        help="Stores graph info and runtime stats, generates a timeline file")
+    parser.add_argument(
+        "-m,",
+        "--monitor",
+        action="store_true",
+        help="Prints execution speed to screen")
+    args = parser.parse_args()
+
+    train_files, weight_files, model_specs = get_config(args.config_file)
+
+    train(train_files, weight_files, model_specs, args.trace, args.monitor)
 
 
 if __name__ == '__main__':
