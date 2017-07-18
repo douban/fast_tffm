@@ -203,14 +203,14 @@ def train(train_files, weight_files, model_specs, trace, monitor):
                         'speed:',
                         model_specs.batch_size / (tend - cur),
                         'shuffle_queue: %.2f%%' %
-                            (max((sum(res_dict[q] for q in shuffleq_sizes) -
-                                model_specs.shuffle_threads *
-                                min_after_dequeue) * 100.0 /
-                                (capacity *
-                                model_specs.shuffle_threads), 0)),
+                        (max((sum(res_dict[q] for q in shuffleq_sizes) -
+                              model_specs.shuffle_threads *
+                              min_after_dequeue) * 100.0 /
+                             (capacity *
+                              model_specs.shuffle_threads), 0)),
                         'example_queue: %.2f%%' %
-                            (res_dict['exq_size'] * 100.0 /
-                                model_specs.queue_size))
+                        (res_dict['exq_size'] * 100.0 /
+                         model_specs.queue_size))
 
                 print(
                     '-- Global Step: %d; Avg loss: %.5f;' % (
