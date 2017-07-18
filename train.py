@@ -166,70 +166,71 @@ def train(train_files, weight_files, model_specs, trace, monitor):
 
         run_metadata = tf.RunMetadata()
         sv = tf.train.Supervisor(saver=None)
-        first_iter = True
+        step_num = None
         ttotal = 0
+        ops_names = ["train_op", "loss", "step_num"]
+        ops = [train_op, loss, global_step]
+        if monitor:
+            shuffleq_sizes = [
+                'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0' %
+                i for i in range(
+                    model_specs.shuffle_threads)]
+            ops_names.append("exq_size")
+            ops.append(exq_size)
+            ops_names.extend(shuffleq_sizes)
+            ops.extend(shuffleq_sizes)
+
         with sv.managed_session() as sess:
-            step_num = 0
             while not sv.should_stop():
                 cur = time.time()
-                if first_iter and trace:
-                    first_iter = False
-                    _, loss_value, step_num, exq_size_value = sess.run(
-                        [train_op, loss, global_step, exq_size],
+                if step_num is None and trace:
+                    ops_res = sess.run(
+                        ops,
                         options=tf.RunOptions(
                             trace_level=tf.RunOptions.FULL_TRACE
                         ),
                         run_metadata=run_metadata
                     )
                 else:
-                    _, loss_value, step_num, exq_size_value = sess.run(
-                        [train_op, loss, global_step, exq_size]
-                    )
+                    ops_res = sess.run(ops)
 
+                res_dict = dict(zip(ops_names, ops_res))
                 tend = time.time()
                 ttotal = ttotal + tend - cur
 
                 if monitor:
-                    queue_size_tpl = (
-                        'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0'
-                    )
-                    shuffleq_size = sum(
-                        sess.run([
-                            queue_size_tpl % i
-                            for i in range(model_specs.shuffle_threads)
-                        ])
-                    )
-
                     print(
                         'speed:',
                         model_specs.batch_size / (tend - cur),
-                        'shuffle_queue: %.2f%%' % (
-                            shuffleq_size * 100.0 / (
-                                capacity * model_specs.shuffle_threads
-                            )
-                        ),
-                        shuffleq_size,
-                        'example_queue: %.2f%%' % (
-                            exq_size_value * 100.0 / model_specs.queue_size
-                        )
-                    )
+                        'shuffle_queue: %.2f%%' %
+                            (max((sum(res_dict[q] for q in shuffleq_sizes) -
+                                model_specs.shuffle_threads *
+                                min_after_dequeue) * 100.0 /
+                                (capacity *
+                                model_specs.shuffle_threads), 0)),
+                        'example_queue: %.2f%%' %
+                            (res_dict['exq_size'] * 100.0 /
+                                model_specs.queue_size))
 
                 print(
                     '-- Global Step: %d; Avg loss: %.5f;' % (
-                        step_num, loss_value
+                        res_dict['step_num'], res_dict['loss']
                     )
                 )
 
         print(
             'Average speed: ',
-            step_num * model_specs.batch_size / ttotal,
+            res_dict['step_num'] * model_specs.batch_size / ttotal,
             ' examples/s'
         )
 
-        if trace:
-            with open('./timeline', 'w') as trace_file:
-                trace = timeline.Timeline(step_stats=run_metadata.step_stats)
-                trace_file.write(trace.generate_chrome_trace_format())
+        if trace is not None:
+            if not trace.endswith('.json'):
+                trace += '.json'
+            with open(trace, 'w') as trace_file:
+                timeline_info = timeline.Timeline(
+                    step_stats=run_metadata.step_stats)
+                trace_file.write(timeline_info.generate_chrome_trace_format())
 
 
 def get_config(config_file):
@@ -308,17 +309,11 @@ def get_config(config_file):
 
 
 def main():
-    '''
-    if len(sys.argv) != 2:
-        sys.stderr.write("Missing config file path")
-        exit()
-    '''
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str)
     parser.add_argument(
         "-t",
         "--trace",
-        action="store_true",
         help="Stores graph info and runtime stats, generates a timeline file")
     parser.add_argument(
         "-m,",
