@@ -233,9 +233,109 @@ def train(train_files, weight_files, model_specs, trace, monitor):
                 trace_file.write(timeline_info.generate_chrome_trace_format())
 
 
+def dist_train(train_files, weight_files, model_specs, trace, monitor, job_name, task_index):
+    cluster = tf.train.ClusterSpec({"ps": model_specs.ps_hosts, "worker": model_specs.worker_hosts})
+    server = tf.train.Server(cluster,
+        job_name=job_name,
+        task_index=task_index)
+
+    if job_name == "ps":
+        server.join()
+    elif job_name == "worker":
+        with tf.device(tf.train.replica_device_setter(
+            #worker_device="/job:worker/task:%d" % task_index,
+            cluster=cluster)):
+            vocab_blocks = []
+            vocab_size_per_block = (
+                model_specs.vocabulary_size / model_specs.vocabulary_block_num + 1
+            )
+            init_value_range = model_specs.init_value_range
+
+            for i in range(model_specs.vocabulary_block_num):
+                vocab_blocks.append(
+                    tf.Variable(
+                        tf.random_uniform(
+                            [vocab_size_per_block, model_specs.factor_num + 1],
+                            -init_value_range, init_value_range
+                        ),
+                        name='vocab_block_%d' % i
+                    )
+                )
+
+            (
+                exq_size, labels, weights, feature_ids, ori_ids,
+                feature_vals, feature_poses
+            ) = input_pipeline(train_files, weight_files, model_specs)
+
+            local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
+
+            pred_score, reg_score = fm_scorer(
+                feature_ids, local_params, feature_vals, feature_poses,
+                model_specs.factor_lambda, model_specs.bias_lambda
+            )
+
+            if model_specs.loss_type == 'logistic':
+                loss = tf.reduce_mean(
+                    weights * tf.nn.sigmoid_cross_entropy_with_logits(
+                        logits=pred_score, labels=labels
+                    )
+                ) / model_specs.batch_size
+            elif model_specs.loss_type == 'mse':
+                loss = tf.reduce_mean(weights * tf.square(pred_score - labels))
+            else:
+                # should never be here
+                assert False
+
+            global_step = tf.Variable(0, name='global_step', trainable=False)
+            #global_step = tf.contrib.framework.get_or_create_global_step()
+            optimizer = tf.train.AdagradOptimizer(
+                model_specs.learning_rate,
+                model_specs.adagrad_init_accumulator
+            )
+            train_op = optimizer.minimize(
+                loss + reg_score / model_specs.batch_size,
+                global_step=global_step
+            )
+
+            min_after_dequeue = 3 * model_specs.batch_size
+            capacity = int(min_after_dequeue + model_specs.batch_size * 1.5)
+
+            run_metadata = tf.RunMetadata()
+            step_num = None
+            ttotal = 0
+            ops_names = ["train_op", "loss", "step_num"]
+            ops = [train_op, loss, global_step]
+            if monitor:
+                shuffleq_sizes = [
+                    'shuffled_%s/shuffle_batch/random_shuffle_queue_Size:0' %
+                    i for i in range(
+                        model_specs.shuffle_threads)]
+                ops_names.append("exq_size")
+                ops.append(exq_size)
+                ops_names.extend(shuffleq_sizes)
+                ops.extend(shuffleq_sizes)
+
+            
+            #init_op = tf.global_variables_initializer()
+            #TODO: make last_step a param
+            # The StopAtStepHook handles stopping after running given steps.
+            hooks=[tf.train.StopAtStepHook(last_step=1000)]
+
+            with tf.train.MonitoredTrainingSession(
+                master=server.target,
+                is_chief=(task_index == 0),
+                hooks=hooks) as mon_sess:
+                
+                while not mon_sess.should_stop():
+                    #mon_sess.run(init_op)
+                    res = mon_sess.run(ops)
+                    print("step_num: ", res[2], ", loss: ", res[1])
+                
+
 def get_config(config_file):
     GENERAL_SECTION = 'General'
     TRAIN_SECTION = 'Train'
+    CLUSTER_SPEC_SECTION = 'ClusterSpec'
     STR_DELIMITER = ','
 
     config = ConfigParser.ConfigParser()
@@ -305,12 +405,19 @@ def get_config(config_file):
     if len(train_files) != len(weight_files):
         raise ValueError(
             'The numbers of train files and weight files do not match.')
+    
+    model_specs.ps_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'ps_hosts')
+    model_specs.worker_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'worker_hosts')
+    
     return train_files, weight_files, model_specs
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str)
+    parser.add_argument("job_name", type=str)
+    parser.add_argument("task_index", type =int)
+
     parser.add_argument(
         "-t",
         "--trace",
@@ -324,8 +431,9 @@ def main():
 
     train_files, weight_files, model_specs = get_config(args.config_file)
 
-    train(train_files, weight_files, model_specs, args.trace, args.monitor)
 
+    #train(train_files, weight_files, model_specs, args.trace, args.monitor)
+    dist_train(train_files, weight_files, model_specs, args.trace, args.monitor, args.job_name, args.task_index)
 
 if __name__ == '__main__':
     print('starting...')
