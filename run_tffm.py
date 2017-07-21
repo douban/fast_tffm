@@ -1,92 +1,69 @@
 from __future__ import print_function
-import glob
-import ConfigParser
 import tensorflow as tf
 import argparse
 from fm_model import Model
+from tensorflow.python.client import timeline
+import time
 
 
-def get_config(config_file):
-    GENERAL_SECTION = 'General'
-    TRAIN_SECTION = 'Train'
-    CLUSTER_SPEC_SECTION = 'ClusterSpec'
-    STR_DELIMITER = ','
+def train(model, sess, monitor, trace):
+    min_after_dequeue = 3 * model.batch_size
+    capacity = int(min_after_dequeue + model.batch_size * 1.5)
+    run_metadata = tf.RunMetadata()
 
-    config = ConfigParser.ConfigParser()
-    config.read(config_file)
-    model = Model()
-
-    def read_config(section, option, not_null=True):
-        if not config.has_option(section, option):
-            if not_null:
-                raise ValueError("%s is undefined." % option)
-            else:
-                return None
+    ttotal = 0
+    step_num = None
+    while not sess.should_stop():
+        cur = time.time()
+        if step_num is None and trace:
+            ops_res = sess.run(
+                model.ops,
+                options=tf.RunOptions(
+                    trace_level=tf.RunOptions.FULL_TRACE
+                ),
+                run_metadata=run_metadata
+            )
         else:
-            value = config.get(section, option)
-            print('  {0} = {1}'.format(option, value))
-            return value
+            ops_res = sess.run(model.ops)
 
-    def read_strs_config(section, option, not_null=True):
-        val = read_config(section, option, not_null)
-        if val is not None:
-            return [s.strip() for s in val.split(STR_DELIMITER)]
-        return None
+        res_dict = dict(zip(model.ops_names, ops_res))
+        tend = time.time()
+        ttotal = ttotal + tend - cur
 
-    print('Config: ')
-    model.vocabulary_size = int(read_config(
-        GENERAL_SECTION, 'vocabulary_size'))
-    model.vocabulary_block_num = int(read_config(
-        GENERAL_SECTION, 'vocabulary_block_num'))
-    model.factor_num = int(read_config(
-        GENERAL_SECTION, 'factor_num'))
-    model.hash_feature_id = read_config(
-        GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
-    model.log_file = read_config(GENERAL_SECTION, 'log_file')
+        if monitor:
+            print(
+                'speed:',
+                model.batch_size / (tend - cur),
+                'shuffle_queue: %.2f%%' %
+                (max((sum(res_dict[q] for q in
+                          model.ops_names[-(model.shuffle_threads):]) -
+                      model.shuffle_threads *
+                      min_after_dequeue) * 100.0 /
+                     (capacity * model.shuffle_threads),
+                     0)),
+                'example_queue: %.2f%%' %
+                (res_dict['exq_size'] * 100.0 /
+                 model.queue_size))
 
-    model.batch_size = int(read_config(TRAIN_SECTION, 'batch_size'))
-    model.init_value_range = float(
-        read_config(TRAIN_SECTION, 'init_value_range'))
-    model.factor_lambda = float(
-        read_config(TRAIN_SECTION, 'factor_lambda'))
-    model.bias_lambda = float(read_config(TRAIN_SECTION, 'bias_lambda'))
-    model.num_epochs = int(read_config(TRAIN_SECTION, 'epoch_num'))
-    model.learning_rate = float(
-        read_config(TRAIN_SECTION, 'learning_rate'))
-    model.adagrad_init_accumulator = float(
-        read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
-    model.loss_type = read_config(
-        TRAIN_SECTION, 'loss_type').strip().lower()
-    if model.loss_type not in ['logistic', 'mse']:
-        raise ValueError('Unsupported loss type: %s' % model.loss_type)
-
-    if config.has_option(TRAIN_SECTION, 'queue_size'):
-        model.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
-    if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
-        model.shuffle_threads = int(
-            read_config(TRAIN_SECTION, 'shuffle_threads')
+        print(
+            '-- Global Step: %d; Avg loss: %.5f;' % (
+                res_dict['step_num'], res_dict['loss']
+            )
         )
-    if config.has_option(TRAIN_SECTION, 'ratio'):
-        model.ratio = int(read_config(TRAIN_SECTION, 'ratio'))
 
-    train_files = read_strs_config(TRAIN_SECTION, 'train_files')
-    train_files = sorted(sum((glob.glob(f) for f in train_files), []))
-    weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
-    if weight_files is not None:
-        if not isinstance(weight_files, list):
-            weight_files = [weight_files]
-        weight_files = sorted(sum((glob.glob(f) for f in weight_files), []))
-    if len(train_files) != len(weight_files):
-        raise ValueError(
-            'The numbers of train files and weight files do not match.')
+    print(
+        'Average speed: ',
+        res_dict['step_num'] * model.batch_size / ttotal,
+        ' examples/s'
+    )
 
-    if config.has_option(CLUSTER_SPEC_SECTION, 'ps_hosts'):
-        model.ps_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'ps_hosts')
-    if config.has_option(CLUSTER_SPEC_SECTION, 'worker_hosts'):
-        model.worker_hosts = read_strs_config(
-            CLUSTER_SPEC_SECTION, 'worker_hosts')
-
-    return train_files, weight_files, model
+    if trace is not None:
+        if not trace.endswith('.json'):
+            trace += '.json'
+        with open(trace, 'w') as trace_file:
+            timeline_info = timeline.Timeline(
+                step_stats=run_metadata.step_stats)
+            trace_file.write(timeline_info.generate_chrome_trace_format())
 
 
 def main():
@@ -109,37 +86,28 @@ def main():
         help="Prints execution speed to screen")
     args = parser.parse_args()
 
-    train_files, weight_files, model = get_config(args.config_file)
+    model = Model(args.config_file)
     if args.dist_train is not None:
         cluster = tf.train.ClusterSpec(
             {"ps": model.ps_hosts, "worker": model.worker_hosts})
         server = tf.train.Server(cluster,
                                  job_name=args.dist_train[0],
                                  task_index=int(args.dist_train[1]))
-        model.build_graph(train_files,
-                          weight_files,
-                          args.trace,
-                          args.monitor,
-                          args.dist_train[0],
-                          int(args.dist_train[1]),
-                          cluster,
-                          server)
-        mon_sess = tf.train.MonitoredTrainingSession(
-            master=server.target,
-            is_chief=(int(args.dist_train[1]) == 0))
-    else:
-        model.build_graph(
-            train_files,
-            weight_files,
-            args.trace,
-            args.monitor,
-            None,
-            None,
-            None,
-            None)
-        mon_sess = tf.train.MonitoredTrainingSession()
+        if args.dist_train[0] == "ps":
+            server.join()
+        elif args.dist_train[0] == "worker":
+            with tf.device(tf.train.replica_device_setter(
+                    cluster=cluster)):
+                model.build_graph(args.monitor, args.trace)
 
-    model.train(mon_sess, args.monitor, args.trace)
+            mon_sess = tf.train.MonitoredTrainingSession(
+                master=server.target,
+                is_chief=(int(args.dist_train[1]) == 0))
+            train(model, mon_sess, args.monitor, args.trace)
+    else:
+        model.build_graph(args.monitor, args.trace)
+        mon_sess = tf.train.MonitoredTrainingSession()
+        train(model, mon_sess, args.monitor, args.trace)
 
 
 if __name__ == '__main__':
