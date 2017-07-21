@@ -6,32 +6,32 @@ An efficient distributed factoriazation machine implementation based on tensorfl
 3. Customized c++ operators, significantly faster than pure python implementations. Comparable performance (actually faster according to my benchmark) with pure c++ implementation.
 
 ## Quick Start
-### Compile
+### Build
 ```
-mkdir build
-cd build
-cmake ../
-make
-make test
-cd ..
+python setup.py build_ext -i
 ```
 ### Local Training
 ```
-python fast_tffm.py train sample.cfg
+python run_tffm.py train sample.cfg [-m] [-t trace_file_name]
 ```
+for CPU version, use
+```
+CUDA_VISIBLE_DEVICES=-1 python ...
+```
+
 ### Distributed Training
 Open 4 command line windows. Run the following commands on each window to start 2 parameter servers and 2 workers.
 ```
-python fast_tffm.py dist_train sample.cfg ps 0
-python fast_tffm.py dist_train sample.cfg ps 1
-python fast_tffm.py dist_train sample.cfg worker 0
-python fast_tffm.py dist_train sample.cfg worker 1
+python run_tffm.py sample.cfg --dist_train ps 0
+python run_tffm.py sample.cfg --dist_train ps 1
+python run_tffm.py sample.cfg --dist_train worker 0
+python run_tffm.py sample.cfg --dist_train worker 1
 ```
-### Local Prediction
+### Local Prediction (not supported by most recent update)
 ```
 python fast_tffm.py predict sample.cfg
 ```
-### Distributed Prediction
+### Distributed Prediction (not supported by most recent update)
 Open 4 command line windows. Run the following commands on each window to start 2 parameter servers and 2 workers.
 ```
 python fast_tffm.py dist_predict sample.cfg ps 0
@@ -68,13 +68,13 @@ python fast_tffm.py dist_predict sample.cfg worker 1
 
 Check the data/weight files in the data folder for details. The data files are sampled from [criteo lab dataset](http://labs.criteo.com/tag/dataset/).
 
-## Run with TFMesos
+## Run with TFMesos (not supported by most recent update)
 
 ```
 tfrun -w 4 -s 1 -m ${MESOS_MASTER} python fast_tffm.py dist_train sample.cfg {job_name} {task_index} {ps_hosts} {worker_hosts}
 ```
 
-## Tensorboard Visualization
+## Tensorboard Visualization (not supported by most recent update)
 
 Set the empty log directory path in `sample.cfg`. The default log saving frequency is 10 files per save. 
 
