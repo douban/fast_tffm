@@ -1,7 +1,7 @@
 from __future__ import print_function
 import tensorflow as tf
 import argparse
-from fm_model import Model
+from tffm.fm_model import Model
 from tensorflow.python.client import timeline
 import time
 
@@ -15,16 +15,19 @@ def train(model, sess, monitor, trace):
     step_num = None
     while not sess.should_stop():
         cur = time.time()
-        if step_num is None and trace:
-            ops_res = sess.run(
-                model.ops,
-                options=tf.RunOptions(
-                    trace_level=tf.RunOptions.FULL_TRACE
-                ),
-                run_metadata=run_metadata
-            )
-        else:
-            ops_res = sess.run(model.ops)
+        try:
+            if step_num is None and trace:
+                ops_res = sess.run(
+                    model.ops,
+                    options=tf.RunOptions(
+                        trace_level=tf.RunOptions.FULL_TRACE
+                    ),
+                    run_metadata=run_metadata
+                )
+            else:
+                ops_res = sess.run(model.ops)
+        except tf.errors.OutOfRangeError:
+            break
 
         res_dict = dict(zip(model.ops_names, ops_res))
         tend = time.time()
