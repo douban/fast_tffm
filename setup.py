@@ -46,7 +46,7 @@ def find_cuda():
             return p
 
 CUDA_TOOLKIT_ROOT = find_cuda()
-extra_link_args = []
+extra_link_args = ['-lrt']
 sources = glob('cc/*.cc')
 
 if CUDA_TOOLKIT_ROOT is not None:
@@ -182,5 +182,5 @@ setup(
         'test': PyTest,
         'build_ext': TFBuild
     },
-    scripts=['train.py']
+    scripts=['run_tffm.py']
 )

@@ -87,9 +87,9 @@ def main():
     args = parser.parse_args()
 
     model = Model(args.config_file)
-    ps_hosts = args.dist_train[2].split(',')
-    worker_hosts = args.dist_train[3].split(',')
     if args.dist_train is not None:
+        ps_hosts = args.dist_train[2].split(',')
+        worker_hosts = args.dist_train[3].split(',')
         cluster = tf.train.ClusterSpec(
             {"ps": ps_hosts, "worker": worker_hosts})
         server = tf.train.Server(cluster,

@@ -68,10 +68,10 @@ python fast_tffm.py dist_predict sample.cfg worker 1
 
 Check the data/weight files in the data folder for details. The data files are sampled from [criteo lab dataset](http://labs.criteo.com/tag/dataset/).
 
-## Run with TFMesos (not supported by most recent update)
+## Run with TFMesos
 
 ```
-tfrun -w 4 -s 1 -m ${MESOS_MASTER} python fast_tffm.py dist_train sample.cfg {job_name} {task_index} {ps_hosts} {worker_hosts}
+tfrun -w 4 -s 1 -m ${MESOS_MASTER} -- python run_tffm.py sample.cfg --dist_train {job_name} {task_index} {ps_hosts} {worker_hosts}
 ```
 
 ## Tensorboard Visualization (not supported by most recent update)
