@@ -23,8 +23,6 @@ class Model(object):
     queue_size = 10000
     shuffle_threads = 1
     ratio = 4
-    ps_hosts = None
-    worker_hosts = None
     train_files = []
     weight_files = []
     ops = []
@@ -177,7 +175,6 @@ class Model(object):
     def _get_config(self, config_file):
         GENERAL_SECTION = 'General'
         TRAIN_SECTION = 'Train'
-        CLUSTER_SPEC_SECTION = 'ClusterSpec'
         STR_DELIMITER = ','
 
         config = ConfigParser.ConfigParser()
@@ -235,12 +232,6 @@ class Model(object):
             )
         if config.has_option(TRAIN_SECTION, 'ratio'):
             self.ratio = int(read_config(TRAIN_SECTION, 'ratio'))
-
-        if config.has_option(CLUSTER_SPEC_SECTION, 'ps_hosts'):
-            self.ps_hosts = read_strs_config(CLUSTER_SPEC_SECTION, 'ps_hosts')
-        if config.has_option(CLUSTER_SPEC_SECTION, 'worker_hosts'):
-            self.worker_hosts = read_strs_config(
-                CLUSTER_SPEC_SECTION, 'worker_hosts')
 
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))

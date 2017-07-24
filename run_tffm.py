@@ -71,9 +71,9 @@ def main():
     parser.add_argument("config_file", type=str)
     parser.add_argument(
         "--dist_train",
-        nargs=2,
+        nargs=4,
         default=None,
-        help="--dist_train job_name task_index")
+        help="--dist_train job_name task_index ps_hosts worker_hosts")
 
     parser.add_argument(
         "-t",
@@ -87,9 +87,11 @@ def main():
     args = parser.parse_args()
 
     model = Model(args.config_file)
+    ps_hosts = args.dist_train[2].split(',')
+    worker_hosts = args.dist_train[3].split(',')
     if args.dist_train is not None:
         cluster = tf.train.ClusterSpec(
-            {"ps": model.ps_hosts, "worker": model.worker_hosts})
+            {"ps": ps_hosts, "worker": worker_hosts})
         server = tf.train.Server(cluster,
                                  job_name=args.dist_train[0],
                                  task_index=int(args.dist_train[1]))
