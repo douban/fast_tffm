@@ -23,11 +23,8 @@ class Model(object):
     save_summaries_steps = 100
     queue_size = 10000
     shuffle_threads = 1
-    ratio = 4
     train_files = []
     weight_files = []
-    ops = []
-    ops_names = []
 
     def _shuffle_input(self,
                        thread_idx,
@@ -60,7 +57,7 @@ class Model(object):
                 labels, weights, feature_ids, ori_ids,
                 feature_vals, feature_poses
             ])
-            return [enq] * self.ratio
+            return enq
 
     def _input_pipeline(self):
         seed = time.time()
@@ -84,14 +81,12 @@ class Model(object):
             self.queue_size,
             [tf.float32, tf.float32, tf.int32, tf.int64, tf.float32, tf.int32]
         )
-        enqueue_ops = sum(
-            (
-                self._shuffle_input(i, train_file_queue, weight_file_queue,
-                                    example_queue)
-                for i in range(self.shuffle_threads)
-            ),
-            []
-        )
+        enqueue_ops = [
+            self._shuffle_input(
+                i, train_file_queue, weight_file_queue, example_queue
+            )
+            for i in range(self.shuffle_threads)
+        ]
         tf.train.add_queue_runner(
             tf.train.QueueRunner(example_queue, enqueue_ops)
         )
@@ -162,18 +157,20 @@ class Model(object):
             global_step=global_step
         )
 
-        self.ops_names = ["train_op", "loss", "step_num"]
-        self.ops = [train_op, loss, global_step]
+        self.ops = {
+            'train_op': train_op,
+            'loss': loss,
+            'step_num': global_step
+        }
+
         if monitor:
             shuffleq_sizes = [
                 "shuffled_%s/shuffle_batch/"
                 "random_shuffle_queue_Size:0" %
                 i for i in range(
                     self.shuffle_threads)]
-            self.ops_names.append("exq_size")
-            self.ops.append(exq_size)
-            self.ops_names.extend(shuffleq_sizes)
-            self.ops.extend(shuffleq_sizes)
+            self.ops['exq_size'] = exq_size
+            self.ops['shuffleq_sizes'] = shuffleq_sizes
 
     def _get_config(self, config_file):
         GENERAL_SECTION = 'General'
@@ -238,8 +235,6 @@ class Model(object):
             self.shuffle_threads = int(
                 read_config(TRAIN_SECTION, 'shuffle_threads')
             )
-        if config.has_option(TRAIN_SECTION, 'ratio'):
-            self.ratio = int(read_config(TRAIN_SECTION, 'ratio'))
 
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))

@@ -11,7 +11,8 @@ def train(model, sess, monitor, trace):
     capacity = int(min_after_dequeue + model.batch_size * 1.5)
     run_metadata = tf.RunMetadata()
 
-    ttotal = 0
+    tf.train.start_queue_runners(sess)
+    st = time.time()
     step_num = None
     while not sess.should_stop():
         cur = time.time()
@@ -24,42 +25,33 @@ def train(model, sess, monitor, trace):
             run_metadata_ = run_metadata
 
         try:
-            ops_res = sess.run(
+            res_dict = sess.run(
                 model.ops, options=options_, run_metadata=run_metadata_
             )
         except tf.errors.OutOfRangeError:
             break
 
-        res_dict = dict(zip(model.ops_names, ops_res))
+        step_num = res_dict['step_num']
         tend = time.time()
-        ttotal = ttotal + tend - cur
 
         if monitor:
+            _min = model.shuffle_threads * min_after_dequeue
+            shuffleq_size = max(sum(res_dict['shuffleq_sizes']) - _min, 0)
             print(
-                'speed:',
-                model.batch_size / (tend - cur),
-                'shuffle_queue: %.2f%%' %
-                (max((sum(res_dict[q] for q in
-                          model.ops_names[-(model.shuffle_threads):]) -
-                      model.shuffle_threads *
-                      min_after_dequeue) * 100.0 /
-                     (capacity * model.shuffle_threads),
-                     0)),
-                'example_queue: %.2f%%' %
-                (res_dict['exq_size'] * 100.0 /
-                 model.queue_size))
-
-        print(
-            '-- Global Step: %d; Avg loss: %.5f;' % (
-                res_dict['step_num'], res_dict['loss']
+                'speed:', model.batch_size / (tend - cur),
+                'shuffle_queue: %.2f%%' % (
+                    shuffleq_size * 100.0 / (capacity * model.shuffle_threads),
+                ),
+                'example_queue: %.2f%%' % (
+                    res_dict['exq_size'] * 100.0 / model.queue_size
+                )
             )
-        )
 
-    print(
-        'Average speed: ',
-        res_dict['step_num'] * model.batch_size / ttotal,
-        ' examples/s'
-    )
+        loss = res_dict['loss']
+        print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss))
+
+    total = time.time() - st
+    print('Average speed: ', step_num * model.batch_size / total, ' ex/s')
 
     if trace is not None:
         if not trace.endswith('.json'):
