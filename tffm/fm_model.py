@@ -151,6 +151,7 @@ class Model(object):
             assert False
 
         tf.summary.scalar('loss', loss)
+        tf.summary.scalar('exq_size', exq_size)
         global_step = tf.contrib.framework.get_or_create_global_step()
         optimizer = tf.train.AdagradOptimizer(
             self.learning_rate,
