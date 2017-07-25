@@ -77,5 +77,6 @@ class FmScorerOpTest(tf.test.TestCase):
             self.assertAllClose(tf_reg.eval(), my_reg.eval())
             self.assertAllClose(tf_grad[0].eval(), my_grad[0].eval())
 
+
 if __name__ == "__main__":
     googletest.main()

@@ -11,7 +11,7 @@ class Model(object):
     vocabulary_block_num = 100
     factor_num = 10
     hash_feature_id = False
-    log_file = './log'
+    log_dir = None
     batch_size = 50000
     init_value_range = 0.01
     factor_lambda = 0
@@ -20,6 +20,7 @@ class Model(object):
     adagrad_initial_accumulator = 0.1
     num_epochs = 10
     loss_type = 'mse'
+    save_summaries_steps = 100
     queue_size = 10000
     shuffle_threads = 1
     ratio = 4
@@ -149,6 +150,7 @@ class Model(object):
             # should never be here
             assert False
 
+        tf.summary.scalar('loss', loss)
         global_step = tf.contrib.framework.get_or_create_global_step()
         optimizer = tf.train.AdagradOptimizer(
             self.learning_rate,
@@ -206,7 +208,12 @@ class Model(object):
             GENERAL_SECTION, 'factor_num'))
         self.hash_feature_id = read_config(
             GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
-        self.log_file = read_config(GENERAL_SECTION, 'log_file')
+        self.log_dir = read_config(
+            GENERAL_SECTION, 'log_dir', not_null=False
+        )
+        if config.has_option(GENERAL_SECTION, 'save_summaries_steps'):
+            self.save_summaries_steps = int(read_config(
+                GENERAL_SECTION, 'save_summaries_steps'))
 
         self.batch_size = int(read_config(TRAIN_SECTION, 'batch_size'))
         self.init_value_range = float(

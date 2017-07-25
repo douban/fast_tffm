@@ -15,17 +15,18 @@ def train(model, sess, monitor, trace):
     step_num = None
     while not sess.should_stop():
         cur = time.time()
+        options_ = None
+        run_metadata_ = None
+        if step_num is None and trace:
+            options_ = tf.RunOptions(
+                trace_level=tf.RunOptions.FULL_TRACE
+            )
+            run_metadata_ = run_metadata
+
         try:
-            if step_num is None and trace:
-                ops_res = sess.run(
-                    model.ops,
-                    options=tf.RunOptions(
-                        trace_level=tf.RunOptions.FULL_TRACE
-                    ),
-                    run_metadata=run_metadata
-                )
-            else:
-                ops_res = sess.run(model.ops)
+            ops_res = sess.run(
+                model.ops, options=options_, run_metadata=run_metadata_
+            )
         except tf.errors.OutOfRangeError:
             break
 
@@ -90,6 +91,10 @@ def main():
     args = parser.parse_args()
 
     model = Model(args.config_file)
+    cluster = None
+    master = ''
+    is_chief = True
+    log_dir = model.log_dir
     if args.dist_train is not None:
         ps_hosts = args.dist_train[2].split(',')
         worker_hosts = args.dist_train[3].split(',')
@@ -100,18 +105,20 @@ def main():
                                  task_index=int(args.dist_train[1]))
         if args.dist_train[0] == "ps":
             server.join()
-        elif args.dist_train[0] == "worker":
-            with tf.device(tf.train.replica_device_setter(
-                    cluster=cluster)):
-                model.build_graph(args.monitor, args.trace)
+        else:
+            assert args.dist_train[0] == 'worker'
+            master = server.target
+            is_chief = (int(args.dist_train[1]) == 0)
+            if not is_chief:
+                log_dir = None
 
-            mon_sess = tf.train.MonitoredTrainingSession(
-                master=server.target,
-                is_chief=(int(args.dist_train[1]) == 0))
-            train(model, mon_sess, args.monitor, args.trace)
-    else:
+    with tf.device(tf.train.replica_device_setter(cluster=cluster)):
         model.build_graph(args.monitor, args.trace)
-        mon_sess = tf.train.MonitoredTrainingSession()
+
+    with tf.train.MonitoredTrainingSession(
+        master=master, is_chief=is_chief, checkpoint_dir=log_dir,
+        save_summaries_steps=model.save_summaries_steps,
+    ) as mon_sess:
         train(model, mon_sess, args.monitor, args.trace)
 
 

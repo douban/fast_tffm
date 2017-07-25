@@ -45,6 +45,7 @@ def find_cuda():
         if os.path.isfile(os.path.join(p, 'bin', 'nvcc')):
             return p
 
+
 CUDA_TOOLKIT_ROOT = find_cuda()
 extra_link_args = ['-lrt']
 sources = glob('cc/*.cc')
