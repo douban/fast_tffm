@@ -85,6 +85,7 @@ def main():
     model = Model(args.config_file)
     cluster = None
     master = ''
+    worker_device = '/job:worker'
     is_chief = True
     log_dir = model.log_dir
     if args.dist_train is not None:
@@ -100,16 +101,19 @@ def main():
         else:
             assert args.dist_train[0] == 'worker'
             master = server.target
+            worker_device = "/job:worker/task:%d" % int(args.dist_train[1])
             is_chief = (int(args.dist_train[1]) == 0)
             if not is_chief:
                 log_dir = None
 
-    with tf.device(tf.train.replica_device_setter(cluster=cluster)):
+    with tf.device(tf.train.replica_device_setter(
+            worker_device=worker_device,
+            cluster=cluster)):
         model.build_graph(args.monitor, args.trace)
 
     with tf.train.MonitoredTrainingSession(
         master=master, is_chief=is_chief, checkpoint_dir=log_dir,
-        save_summaries_steps=model.save_summaries_steps,
+        save_summaries_steps=model.save_summaries_steps
     ) as mon_sess:
         train(model, mon_sess, args.monitor, args.trace)
 
