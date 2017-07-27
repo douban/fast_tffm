@@ -33,20 +33,30 @@ class Model(object):
                        ex_q):
         with tf.name_scope("shuffled_%s" % (thread_idx,)):
             train_reader = tf.TextLineReader()
-            weight_reader = tf.TextLineReader()
             _, data_lines = train_reader.read_up_to(
                 train_file_queue, self.batch_size)
-            _, weight_lines = weight_reader.read_up_to(
-                weight_file_queue, self.batch_size)
 
             min_after_dequeue = 3 * self.batch_size
             capacity = int(min_after_dequeue + self.batch_size * 1.5)
-            data_lines_batch, weight_lines_batch = tf.train.shuffle_batch(
-                [data_lines, weight_lines], self.batch_size, capacity,
-                min_after_dequeue, enqueue_many=True
-            )
 
-            weights = tf.string_to_number(weight_lines_batch, tf.float32)
+            if weight_file_queue is not None:
+                weight_reader = tf.TextLineReader()
+                _, weight_lines = weight_reader.read_up_to(
+                    weight_file_queue, self.batch_size)
+
+                data_lines_batch, weight_lines_batch = tf.train.shuffle_batch(
+                    [data_lines, weight_lines], self.batch_size, capacity,
+                    min_after_dequeue, enqueue_many=True
+                )
+
+                weights = tf.string_to_number(weight_lines_batch, tf.float32)
+            else:
+                data_lines_batch = tf.train.shuffle_batch(
+                    [data_lines], self.batch_size, capacity,
+                    min_after_dequeue, enqueue_many=True
+                )
+                weights = tf.ones(tf.shape(data_lines_batch), tf.float32)
+
             labels, sizes, feature_ids, feature_vals = fm_parser(
                 data_lines_batch, self.vocabulary_size
             )
@@ -69,13 +79,17 @@ class Model(object):
             shuffle=True,
             seed=seed
         )
-        weight_file_queue = tf.train.string_input_producer(
-            self.weight_files,
-            num_epochs=self.num_epochs,
-            shared_name="weight_file_queue",
-            shuffle=True,
-            seed=seed
-        )
+
+        if len(self.weight_files) == 0:
+            weight_file_queue = None
+        else:
+            weight_file_queue = tf.train.string_input_producer(
+                self.weight_files,
+                num_epochs=self.num_epochs,
+                shared_name="weight_file_queue",
+                shuffle=True,
+                seed=seed
+            )
 
         example_queue = tf.FIFOQueue(
             self.queue_size,
