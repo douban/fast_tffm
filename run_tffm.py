@@ -4,6 +4,7 @@ import argparse
 from tffm.fm_model import Model
 from tensorflow.python.client import timeline
 import time
+import os
 
 
 def predict(model, sess):
@@ -12,7 +13,6 @@ def predict(model, sess):
         while not sess.should_stop():
             pred_score = sess.run(model.pred_op)
             for score in pred_score:
-                print(score)
                 f.write(str(score) + '\n')
 
 
@@ -94,6 +94,10 @@ def main():
     args = parser.parse_args()
 
     model = Model(args.config_file)
+    if args.task == 'predict' and model.log_dir is None:
+        print("Missing log directory. Must include a checkpoint file.")
+        os.exit(1)
+
     cluster = None
     master = ''
     worker_device = '/job:worker'
