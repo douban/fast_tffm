@@ -151,7 +151,7 @@ class Model(object):
                 weights * tf.nn.sigmoid_cross_entropy_with_logits(
                     logits=pred_score, labels=labels
                 )
-            ) / self.batch_size
+            )
         elif self.loss_type == 'mse':
             loss = tf.reduce_mean(
                 weights * tf.square(pred_score - labels))
