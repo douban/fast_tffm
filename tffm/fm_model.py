@@ -25,6 +25,7 @@ class Model(object):
     shuffle_threads = 1
     train_files = []
     weight_files = []
+    predict_files = []
 
     def _shuffle_input(self,
                        thread_idx,
@@ -34,7 +35,8 @@ class Model(object):
         with tf.name_scope("shuffled_%s" % (thread_idx,)):
             train_reader = tf.TextLineReader()
             _, data_lines = train_reader.read_up_to(
-                train_file_queue, self.batch_size)
+                train_file_queue, self.batch_size
+            )
 
             min_after_dequeue = 3 * self.batch_size
             capacity = int(min_after_dequeue + self.batch_size * 1.5)
@@ -42,18 +44,21 @@ class Model(object):
             if weight_file_queue is not None:
                 weight_reader = tf.TextLineReader()
                 _, weight_lines = weight_reader.read_up_to(
-                    weight_file_queue, self.batch_size)
+                    weight_file_queue, self.batch_size
+                )
 
                 data_lines_batch, weight_lines_batch = tf.train.shuffle_batch(
                     [data_lines, weight_lines], self.batch_size, capacity,
-                    min_after_dequeue, enqueue_many=True
+                    min_after_dequeue, enqueue_many=True,
+                    allow_smaller_final_batch=True
                 )
 
                 weights = tf.string_to_number(weight_lines_batch, tf.float32)
             else:
                 data_lines_batch = tf.train.shuffle_batch(
                     [data_lines], self.batch_size, capacity,
-                    min_after_dequeue, enqueue_many=True
+                    min_after_dequeue, enqueue_many=True,
+                    allow_smaller_final_batch=True
                 )
                 weights = tf.ones(tf.shape(data_lines_batch), tf.float32)
 
@@ -116,6 +121,39 @@ class Model(object):
             feature_vals, feature_poses
         )
 
+    def _pred_or_valid_op(self, vocab_blocks, task, data_file):
+        data_file_queue = tf.train.string_input_producer(
+            data_file,
+            shared_name=task + "_file_queue"
+        )
+
+        example_queue = tf.FIFOQueue(
+            self.queue_size,
+            [tf.float32, tf.float32, tf.int32, tf.int64, tf.float32, tf.int32]
+        )
+        enqueue_ops = [
+            self._shuffle_input(
+                i, data_file_queue, None, example_queue
+            )
+            for i in range(self.shuffle_threads)
+        ]
+        tf.train.add_queue_runner(
+            tf.train.QueueRunner(example_queue, enqueue_ops)
+        )
+
+        (
+            labels, weights, feature_ids, ori_ids, feature_vals, feature_poses
+        ) = example_queue.dequeue()
+
+        local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
+
+        pred_score, reg_score = fm_scorer(
+            feature_ids, local_params, feature_vals, feature_poses,
+            self.factor_lambda, self.bias_lambda
+        )
+
+        return pred_score
+
     def build_graph(self, monitor, trace):
         vocab_blocks = []
         vocab_size_per_block = (
@@ -146,6 +184,8 @@ class Model(object):
             self.factor_lambda, self.bias_lambda
         )
 
+        self.pred_op = self._pred_or_valid_op(
+            vocab_blocks, 'predict', self.predict_files)
         if self.loss_type == 'logistic':
             loss = tf.reduce_mean(
                 weights * tf.nn.sigmoid_cross_entropy_with_logits(
@@ -186,9 +226,12 @@ class Model(object):
             self.ops['exq_size'] = exq_size
             self.ops['shuffleq_sizes'] = shuffleq_sizes
 
+        self.saver = tf.train.Saver()
+
     def _get_config(self, config_file):
         GENERAL_SECTION = 'General'
         TRAIN_SECTION = 'Train'
+        PREDICT_SECTION = 'Predict'
         STR_DELIMITER = ','
 
         config = ConfigParser.ConfigParser()
@@ -222,6 +265,9 @@ class Model(object):
             GENERAL_SECTION, 'hash_feature_id').strip().lower() == 'true'
         self.log_dir = read_config(
             GENERAL_SECTION, 'log_dir', not_null=False
+        )
+        self.model_file = read_config(
+            GENERAL_SECTION, 'model_file', not_null=False
         )
         if config.has_option(GENERAL_SECTION, 'save_summaries_steps'):
             self.save_summaries_steps = int(read_config(
@@ -262,6 +308,14 @@ class Model(object):
                 raise ValueError(
                     'The numbers of train files'
                     'and weight files do not match.')
+
+        predict_files = read_strs_config(
+            PREDICT_SECTION, 'predict_files', False)
+        self.predict_files = sorted(
+            sum((glob.glob(f) for f in predict_files), []))
+        self.score_path = read_config(
+            PREDICT_SECTION, 'score_path', not_null=False
+        )
 
     def __init__(self, config_file):
         self._get_config(config_file)

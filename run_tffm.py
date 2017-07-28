@@ -6,6 +6,16 @@ from tensorflow.python.client import timeline
 import time
 
 
+def predict(model, sess):
+    tf.train.start_queue_runners(sess)
+    with open(model.score_path, 'w') as f:
+        while not sess.should_stop():
+            pred_score = sess.run(model.pred_op)
+            for score in pred_score:
+                print(score)
+                f.write(str(score) + '\n')
+
+
 def train(model, sess, monitor, trace):
     min_after_dequeue = 3 * model.batch_size
     capacity = int(min_after_dequeue + model.batch_size * 1.5)
@@ -64,6 +74,7 @@ def train(model, sess, monitor, trace):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("task", choices=['train', 'predict'])
     parser.add_argument("config_file", type=str)
     parser.add_argument(
         "--dist_train",
@@ -115,9 +126,12 @@ def main():
         master=master, is_chief=is_chief, checkpoint_dir=log_dir,
         save_summaries_steps=model.save_summaries_steps
     ) as mon_sess:
-        train(model, mon_sess, args.monitor, args.trace)
+        print("========", args.task, "========")
+        if args.task == 'train':
+            train(model, mon_sess, args.monitor, args.trace)
+        else:
+            predict(model, mon_sess)
 
 
 if __name__ == '__main__':
-    print('starting...')
     main()
