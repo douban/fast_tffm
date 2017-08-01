@@ -20,12 +20,16 @@ class Model(object):
     adagrad_initial_accumulator = 0.1
     num_epochs = 10
     loss_type = 'mse'
+    save_steps = 100
     save_summaries_steps = 100
     queue_size = 10000
     shuffle_threads = 1
     train_files = []
     weight_files = []
     predict_files = []
+    validation_data_files = []
+    validation_weight_files = []
+    validation_data = None
 
     def _shuffle_input(self,
                        thread_idx,
@@ -121,7 +125,7 @@ class Model(object):
             feature_vals, feature_poses
         )
 
-    def _pred_or_valid_op(self, vocab_blocks, task, data_file):
+    def _pred_op(self, vocab_blocks, task, data_file):
         data_file_queue = tf.train.string_input_producer(
             data_file,
             shared_name=task + "_file_queue"
@@ -152,9 +156,42 @@ class Model(object):
             self.factor_lambda, self.bias_lambda
         )
 
-        return pred_score
+        return labels, pred_score
 
+    def load_validation_data(self):
+        if len(self.validation_data_files) == 0:
+            return
+        
+        data_lines = []
+        for data_file in self.validation_data_files:
+            with open(data_file) as f:
+                data_lines.extend(f.readlines())
+        data_lines = [l.strip('\n') for l in data_lines]
+
+        weight_lines = []
+        for weight_file in self.validation_weight_files:
+            with open(weight_file) as f:
+                weight_lines.extend(f.readlines())
+        weight_lines = [l.strip('\n') for l in weight_lines]
+
+        labels, sizes, feature_ids, feature_vals = fm_parser(
+            tf.constant(data_lines, dtype=tf.string), self.vocabulary_size
+        )
+        ori_ids, feature_ids = tf.unique(feature_ids)
+        feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
+        
+        if len(weight_lines) == 0:
+            weights = tf.ones(tf.shape(labels), tf.float32)
+        else:
+            weights = tf.string_to_number(tf.constant(weight_lines, dtype=tf.string), tf.float32)
+
+        self.validation_data = dict(zip(
+            ['labels', 'weights', 'feature_ids', 'ori_ids', 'feature_vals', 'feature_poses'],
+            [labels, weights, feature_ids, ori_ids, feature_vals, feature_poses]))
+        
+    
     def build_graph(self, monitor, trace):
+        self.load_validation_data()
         vocab_blocks = []
         vocab_size_per_block = (
             self.vocabulary_size / self.vocabulary_block_num + 1
@@ -184,17 +221,43 @@ class Model(object):
             self.factor_lambda, self.bias_lambda
         )
 
-        self.pred_op = self._pred_or_valid_op(
+        self.pred_op = self._pred_op(
             vocab_blocks, 'predict', self.predict_files)
+        
+        if self.validation_data is not None:
+            local_params = tf.nn.embedding_lookup(vocab_blocks, self.validation_data['ori_ids'])
+            v_pred_score, _ = fm_scorer(
+                self.validation_data['feature_ids'], 
+                local_params,
+                self.validation_data['feature_vals'], 
+                self.validation_data['feature_poses'],
+                self.factor_lambda, self.bias_lambda
+            )
+
+
         if self.loss_type == 'logistic':
             loss = tf.reduce_mean(
                 weights * tf.nn.sigmoid_cross_entropy_with_logits(
                     logits=pred_score, labels=labels
                 )
             )
+            if not len(self.validation_data_files) == 0:
+                self.valid_op = tf.reduce_mean(
+                    self.validation_data['weights'] * tf.nn.sigmoid_cross_entropy_with_logits(
+                        logits=v_pred_score, labels=self.validation_data['labels']
+                    )
+                )
+
         elif self.loss_type == 'mse':
             loss = tf.reduce_mean(
                 weights * tf.square(pred_score - labels))
+            
+            if not len(self.validation_data_files) == 0:
+                self.valid_op = tf.reduce_mean(
+                    self.validation_data['weights'] * tf.square(
+                        v_pred_score - self.validation_data['labels']
+                    )
+                )
         else:
             # should never be here
             assert False
@@ -286,16 +349,9 @@ class Model(object):
             read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
         self.loss_type = read_config(
             TRAIN_SECTION, 'loss_type').strip().lower()
-        if self.loss_type not in ['logistic', 'mse']:
-            raise ValueError('Unsupported loss type: %s' % self.loss_type)
-
-        if config.has_option(TRAIN_SECTION, 'queue_size'):
-            self.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
-        if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
-            self.shuffle_threads = int(
-                read_config(TRAIN_SECTION, 'shuffle_threads')
-            )
-
+        self.save_steps = int(read_config(TRAIN_SECTION, 'save_steps', not_null=False))
+        self.save_steps = float(read_config(TRAIN_SECTION, 'tolerance'))
+   	
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))
         weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
@@ -307,7 +363,24 @@ class Model(object):
             if len(train_files) != len(weight_files):
                 raise ValueError(
                     'The numbers of train files'
-                    'and weight files do not match.')
+                    'and weight files do not match.') 
+
+        validation_data_files = read_strs_config(TRAIN_SECTION, 'validation_files', False)
+        if validation_data_files is not None:
+            if not isinstance(validation_data_files, list):
+                validation_data_files = [validation_data_files]
+            self.validation_data_files = sorted(
+                sum((glob.glob(f) for f in validation_data_files), []))
+        validation_weight_files = read_strs_config(TRAIN_SECTION, 'validation_weight_files', False)
+        if validation_weight_files is not None:
+            if not isinstance(validation_weight_files, list):
+                validation_weight_files = [validation_weight_files]
+            self.validation_weight_files = sorted(
+                sum((glob.glob(f) for f in validation_weight_files), []))
+            if len(validation_data_files) != len(validation_weight_files):
+                raise ValueError(
+                    'The numbers of validation data files'
+                    'and validation weight files do not match.') 
 
         predict_files = read_strs_config(
             PREDICT_SECTION, 'predict_files', False)
