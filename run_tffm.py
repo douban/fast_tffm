@@ -42,7 +42,6 @@ def train(model, sess, monitor, trace):
         except tf.errors.OutOfRangeError:
             break
 
-        
         step_num = res_dict['step_num']
         tend = time.time()
 
@@ -61,19 +60,20 @@ def train(model, sess, monitor, trace):
 
         loss = res_dict['loss']
         print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss))
-        
-        if model.validation_data is not None and step_num is not None and step_num % model.save_steps == 0:
+
+        if (model.validation_data is not None
+                and step_num is not None
+                and step_num % model.save_steps == 0):
             v_loss = sess.run(model.valid_op)
-            print('validation loss at step %d: %.8f'% (step_num, v_loss))
+            print('validation loss at step %d: %.8f' % (step_num, v_loss))
             if v_loss < model.tolerance:
-                print('Loss on validation data set is below tolerance.'
-                        'Training completed.')
+                print('Loss on validation data set is below tolerance. '
+                      'Training completed.')
                 end_session = True
 
     total = time.time() - st
     print('Average speed: ', step_num * model.batch_size / total, ' ex/s')
-
-    
+    print('Model saved to ', model.log_dir)
 
     if trace is not None:
         if not trace.endswith('.json'):
@@ -138,12 +138,12 @@ def main():
             cluster=cluster)):
         model.build_graph(args.monitor, args.trace)
 
-
-    saver_hook = tf.train.CheckpointSaverHook(model.log_dir, save_steps=model.save_steps)
+    saver_hook = tf.train.CheckpointSaverHook(
+        model.log_dir, save_steps=model.save_steps)
     with tf.train.MonitoredTrainingSession(
         master=master, is_chief=is_chief, checkpoint_dir=log_dir,
         save_summaries_steps=model.save_summaries_steps,
-        hooks = [saver_hook]
+        hooks=[saver_hook]
     ) as mon_sess:
         print("========", args.task, "========")
         if args.task == 'train':
