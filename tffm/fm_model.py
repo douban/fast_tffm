@@ -161,7 +161,7 @@ class Model(object):
     def load_validation_data(self):
         if len(self.validation_data_files) == 0:
             return
-
+        print('Preloading validation data...')
         data_lines = []
         for data_file in self.validation_data_files:
             with open(data_file) as f:
@@ -363,7 +363,6 @@ class Model(object):
                 TRAIN_SECTION,
                 'save_steps',
                 not_null=False))
-        self.tolerance = float(read_config(TRAIN_SECTION, 'tolerance'))
 
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))
@@ -385,6 +384,7 @@ class Model(object):
                 validation_data_files = [validation_data_files]
             self.validation_data_files = sorted(
                 sum((glob.glob(f) for f in validation_data_files), []))
+            self.tolerance = float(read_config(TRAIN_SECTION, 'tolerance'))
         validation_weight_files = read_strs_config(
             TRAIN_SECTION, 'validation_weight_files', False)
         if validation_weight_files is not None:
