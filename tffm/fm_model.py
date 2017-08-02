@@ -125,38 +125,25 @@ class Model(object):
             feature_vals, feature_poses
         )
 
-    def _pred_op(self, vocab_blocks, task, data_file):
-        data_file_queue = tf.train.string_input_producer(
-            data_file,
-            shared_name=task + "_file_queue"
+    def pred_op(self, data_file):
+        with open(data_file) as f:
+            data_lines = f.readlines()
+        data_lines = [l.strip('\n') for l in data_lines]
+
+        labels, sizes, feature_ids, feature_vals = fm_parser(
+            data_lines, self.vocabulary_size
         )
 
-        example_queue = tf.FIFOQueue(
-            self.queue_size,
-            [tf.float32, tf.float32, tf.int32, tf.int64, tf.float32, tf.int32]
-        )
-        enqueue_ops = [
-            self._shuffle_input(
-                i, data_file_queue, None, example_queue
-            )
-            for i in range(self.shuffle_threads)
-        ]
-        tf.train.add_queue_runner(
-            tf.train.QueueRunner(example_queue, enqueue_ops)
-        )
-
-        (
-            labels, weights, feature_ids, ori_ids, feature_vals, feature_poses
-        ) = example_queue.dequeue()
-
-        local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
+        ori_ids, feature_ids = tf.unique(feature_ids)
+        feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
+        local_params = tf.nn.embedding_lookup(self.vocab_blocks, ori_ids)
 
         pred_score, reg_score = fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses,
             self.factor_lambda, self.bias_lambda
         )
 
-        return labels, pred_score
+        return pred_score
 
     def load_validation_data(self):
         if len(self.validation_data_files) == 0:
@@ -201,14 +188,14 @@ class Model(object):
 
     def build_graph(self, monitor, trace):
         self.load_validation_data()
-        vocab_blocks = []
+        self.vocab_blocks = []
         vocab_size_per_block = (
             self.vocabulary_size / self.vocabulary_block_num + 1
         )
         init_value_range = self.init_value_range
 
         for i in range(self.vocabulary_block_num):
-            vocab_blocks.append(
+            self.vocab_blocks.append(
                 tf.Variable(
                     tf.random_uniform(
                         [vocab_size_per_block, self.factor_num + 1],
@@ -223,19 +210,20 @@ class Model(object):
             feature_vals, feature_poses
         ) = self._input_pipeline()
 
-        local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
+        local_params = tf.nn.embedding_lookup(self.vocab_blocks, ori_ids)
 
         pred_score, reg_score = fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses,
             self.factor_lambda, self.bias_lambda
         )
 
-        self.pred_op = self._pred_op(
-            vocab_blocks, 'predict', self.predict_files)
+        self.pred_ops = []
+        for data_file in self.predict_files:
+            self.pred_ops.append(self.pred_op(data_file))
 
         if self.validation_data is not None:
             local_params = tf.nn.embedding_lookup(
-                vocab_blocks, self.validation_data['ori_ids'])
+                self.vocab_blocks, self.validation_data['ori_ids'])
             v_pred_score, _ = fm_scorer(
                 self.validation_data['feature_ids'],
                 local_params,
@@ -401,9 +389,6 @@ class Model(object):
             PREDICT_SECTION, 'predict_files', False)
         self.predict_files = sorted(
             sum((glob.glob(f) for f in predict_files), []))
-        self.score_path = read_config(
-            PREDICT_SECTION, 'score_path', not_null=False
-        )
 
     def __init__(self, config_file):
         self._get_config(config_file)

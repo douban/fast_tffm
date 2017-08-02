@@ -8,12 +8,13 @@ import os
 
 
 def predict(model, sess):
-    tf.train.start_queue_runners(sess)
-    with open(model.score_path, 'w') as f:
-        while not sess.should_stop():
-            pred_score = sess.run(model.pred_op)
+    res = dict(zip(model.predict_files, model.pred_ops))
+    for data_file, pred_op in res.items():
+        with open(data_file + '_score', 'w') as f:
+            pred_score = sess.run(pred_op)
             for score in pred_score:
                 f.write(str(score) + '\n')
+    print('Done. Scores saved to same directory as predict files')
 
 
 def train(model, sess, monitor, trace):
