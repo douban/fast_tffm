@@ -4,6 +4,17 @@ import argparse
 from tffm.fm_model import Model
 from tensorflow.python.client import timeline
 import time
+import os
+
+
+def predict(model, sess):
+    res = dict(zip(model.predict_files, model.pred_ops))
+    for data_file, pred_op in res.items():
+        with open(data_file + '_score', 'w') as f:
+            pred_score = sess.run(pred_op)
+            for score in pred_score:
+                f.write(str(score) + '\n')
+    print('Done. Scores saved to same directory as predict files')
 
 
 def train(model, sess, monitor, trace):
@@ -14,7 +25,8 @@ def train(model, sess, monitor, trace):
     tf.train.start_queue_runners(sess)
     st = time.time()
     step_num = None
-    while not sess.should_stop():
+    end_session = False
+    while not (sess.should_stop() or end_session):
         cur = time.time()
         options_ = None
         run_metadata_ = None
@@ -50,8 +62,19 @@ def train(model, sess, monitor, trace):
         loss = res_dict['loss']
         print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss))
 
+        if (model.validation_data is not None
+                and step_num is not None
+                and step_num % model.save_steps == 0):
+            v_loss = sess.run(model.valid_op)
+            print('validation loss at step %d: %.8f' % (step_num, v_loss))
+            if v_loss < model.tolerance:
+                print('Loss on validation data set is below tolerance. '
+                      'Training completed.')
+                end_session = True
+
     total = time.time() - st
     print('Average speed: ', step_num * model.batch_size / total, ' ex/s')
+    print('Model saved to ', model.log_dir)
 
     if trace is not None:
         if not trace.endswith('.json'):
@@ -64,6 +87,7 @@ def train(model, sess, monitor, trace):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("task", choices=['train', 'predict'])
     parser.add_argument("config_file", type=str)
     parser.add_argument(
         "--dist_train",
@@ -83,6 +107,10 @@ def main():
     args = parser.parse_args()
 
     model = Model(args.config_file)
+    if args.task == 'predict' and model.log_dir is None:
+        print("Missing log directory. Must include a checkpoint file.")
+        os.exit(1)
+
     cluster = None
     master = ''
     worker_device = '/job:worker'
@@ -111,13 +139,19 @@ def main():
             cluster=cluster)):
         model.build_graph(args.monitor, args.trace)
 
+    saver_hook = tf.train.CheckpointSaverHook(
+        model.log_dir, save_steps=model.save_steps)
     with tf.train.MonitoredTrainingSession(
         master=master, is_chief=is_chief, checkpoint_dir=log_dir,
-        save_summaries_steps=model.save_summaries_steps
+        save_summaries_steps=model.save_summaries_steps,
+        hooks=[saver_hook]
     ) as mon_sess:
-        train(model, mon_sess, args.monitor, args.trace)
+        print("========", args.task, "========")
+        if args.task == 'train':
+            train(model, mon_sess, args.monitor, args.trace)
+        else:
+            predict(model, mon_sess)
 
 
 if __name__ == '__main__':
-    print('starting...')
     main()

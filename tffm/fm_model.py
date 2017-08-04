@@ -20,11 +20,16 @@ class Model(object):
     adagrad_initial_accumulator = 0.1
     num_epochs = 10
     loss_type = 'mse'
+    save_steps = 100
     save_summaries_steps = 100
     queue_size = 10000
     shuffle_threads = 1
     train_files = []
     weight_files = []
+    predict_files = []
+    validation_data_files = []
+    validation_weight_files = []
+    validation_data = None
 
     def _shuffle_input(self,
                        thread_idx,
@@ -34,7 +39,8 @@ class Model(object):
         with tf.name_scope("shuffled_%s" % (thread_idx,)):
             train_reader = tf.TextLineReader()
             _, data_lines = train_reader.read_up_to(
-                train_file_queue, self.batch_size)
+                train_file_queue, self.batch_size
+            )
 
             min_after_dequeue = 3 * self.batch_size
             capacity = int(min_after_dequeue + self.batch_size * 1.5)
@@ -42,18 +48,21 @@ class Model(object):
             if weight_file_queue is not None:
                 weight_reader = tf.TextLineReader()
                 _, weight_lines = weight_reader.read_up_to(
-                    weight_file_queue, self.batch_size)
+                    weight_file_queue, self.batch_size
+                )
 
                 data_lines_batch, weight_lines_batch = tf.train.shuffle_batch(
                     [data_lines, weight_lines], self.batch_size, capacity,
-                    min_after_dequeue, enqueue_many=True
+                    min_after_dequeue, enqueue_many=True,
+                    allow_smaller_final_batch=True
                 )
 
                 weights = tf.string_to_number(weight_lines_batch, tf.float32)
             else:
                 data_lines_batch = tf.train.shuffle_batch(
                     [data_lines], self.batch_size, capacity,
-                    min_after_dequeue, enqueue_many=True
+                    min_after_dequeue, enqueue_many=True,
+                    allow_smaller_final_batch=True
                 )
                 weights = tf.ones(tf.shape(data_lines_batch), tf.float32)
 
@@ -116,15 +125,77 @@ class Model(object):
             feature_vals, feature_poses
         )
 
+    def pred_op(self, data_file):
+        with open(data_file) as f:
+            data_lines = f.readlines()
+        data_lines = [l.strip('\n') for l in data_lines]
+
+        labels, sizes, feature_ids, feature_vals = fm_parser(
+            data_lines, self.vocabulary_size
+        )
+
+        ori_ids, feature_ids = tf.unique(feature_ids)
+        feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
+        local_params = tf.nn.embedding_lookup(self.vocab_blocks, ori_ids)
+
+        pred_score, reg_score = fm_scorer(
+            feature_ids, local_params, feature_vals, feature_poses,
+            self.factor_lambda, self.bias_lambda
+        )
+
+        return pred_score
+
+    def load_validation_data(self):
+        if len(self.validation_data_files) == 0:
+            return
+        print('Preloading validation data...')
+        data_lines = []
+        for data_file in self.validation_data_files:
+            with open(data_file) as f:
+                data_lines.extend(f.readlines())
+        data_lines = [l.strip('\n') for l in data_lines]
+
+        weight_lines = []
+        for weight_file in self.validation_weight_files:
+            with open(weight_file) as f:
+                weight_lines.extend(f.readlines())
+        weight_lines = [l.strip('\n') for l in weight_lines]
+
+        labels, sizes, feature_ids, feature_vals = fm_parser(
+            tf.constant(data_lines, dtype=tf.string), self.vocabulary_size
+        )
+        ori_ids, feature_ids = tf.unique(feature_ids)
+        feature_poses = tf.concat([[0], tf.cumsum(sizes)], 0)
+
+        if len(weight_lines) == 0:
+            weights = tf.ones(tf.shape(labels), tf.float32)
+        else:
+            weights = tf.string_to_number(
+                tf.constant(
+                    weight_lines,
+                    dtype=tf.string),
+                tf.float32)
+
+        self.validation_data = dict(zip(
+            [
+                'labels', 'weights', 'feature_ids',
+                'ori_ids', 'feature_vals', 'feature_poses'
+            ],
+            [
+                labels, weights, feature_ids,
+                ori_ids, feature_vals, feature_poses
+            ]))
+
     def build_graph(self, monitor, trace):
-        vocab_blocks = []
+        self.load_validation_data()
+        self.vocab_blocks = []
         vocab_size_per_block = (
             self.vocabulary_size / self.vocabulary_block_num + 1
         )
         init_value_range = self.init_value_range
 
         for i in range(self.vocabulary_block_num):
-            vocab_blocks.append(
+            self.vocab_blocks.append(
                 tf.Variable(
                     tf.random_uniform(
                         [vocab_size_per_block, self.factor_num + 1],
@@ -139,12 +210,27 @@ class Model(object):
             feature_vals, feature_poses
         ) = self._input_pipeline()
 
-        local_params = tf.nn.embedding_lookup(vocab_blocks, ori_ids)
+        local_params = tf.nn.embedding_lookup(self.vocab_blocks, ori_ids)
 
         pred_score, reg_score = fm_scorer(
             feature_ids, local_params, feature_vals, feature_poses,
             self.factor_lambda, self.bias_lambda
         )
+
+        self.pred_ops = []
+        for data_file in self.predict_files:
+            self.pred_ops.append(self.pred_op(data_file))
+
+        if self.validation_data is not None:
+            local_params = tf.nn.embedding_lookup(
+                self.vocab_blocks, self.validation_data['ori_ids'])
+            v_pred_score, _ = fm_scorer(
+                self.validation_data['feature_ids'],
+                local_params,
+                self.validation_data['feature_vals'],
+                self.validation_data['feature_poses'],
+                self.factor_lambda, self.bias_lambda
+            )
 
         if self.loss_type == 'logistic':
             loss = tf.reduce_mean(
@@ -152,9 +238,23 @@ class Model(object):
                     logits=pred_score, labels=labels
                 )
             )
+            if not len(self.validation_data_files) == 0:
+                self.valid_op = tf.reduce_mean(
+                    self.validation_data['weights'] *
+                    tf.nn.sigmoid_cross_entropy_with_logits(
+                        logits=v_pred_score,
+                        labels=self.validation_data['labels']))
+
         elif self.loss_type == 'mse':
             loss = tf.reduce_mean(
                 weights * tf.square(pred_score - labels))
+
+            if not len(self.validation_data_files) == 0:
+                self.valid_op = tf.reduce_mean(
+                    self.validation_data['weights'] * tf.square(
+                        v_pred_score - self.validation_data['labels']
+                    )
+                )
         else:
             # should never be here
             assert False
@@ -186,9 +286,12 @@ class Model(object):
             self.ops['exq_size'] = exq_size
             self.ops['shuffleq_sizes'] = shuffleq_sizes
 
+        self.saver = tf.train.Saver()
+
     def _get_config(self, config_file):
         GENERAL_SECTION = 'General'
         TRAIN_SECTION = 'Train'
+        PREDICT_SECTION = 'Predict'
         STR_DELIMITER = ','
 
         config = ConfigParser.ConfigParser()
@@ -223,6 +326,9 @@ class Model(object):
         self.log_dir = read_config(
             GENERAL_SECTION, 'log_dir', not_null=False
         )
+        self.model_file = read_config(
+            GENERAL_SECTION, 'model_file', not_null=False
+        )
         if config.has_option(GENERAL_SECTION, 'save_summaries_steps'):
             self.save_summaries_steps = int(read_config(
                 GENERAL_SECTION, 'save_summaries_steps'))
@@ -240,15 +346,11 @@ class Model(object):
             read_config(TRAIN_SECTION, 'adagrad.initial_accumulator'))
         self.loss_type = read_config(
             TRAIN_SECTION, 'loss_type').strip().lower()
-        if self.loss_type not in ['logistic', 'mse']:
-            raise ValueError('Unsupported loss type: %s' % self.loss_type)
-
-        if config.has_option(TRAIN_SECTION, 'queue_size'):
-            self.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
-        if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
-            self.shuffle_threads = int(
-                read_config(TRAIN_SECTION, 'shuffle_threads')
-            )
+        self.save_steps = int(
+            read_config(
+                TRAIN_SECTION,
+                'save_steps',
+                not_null=False))
 
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))
@@ -262,6 +364,31 @@ class Model(object):
                 raise ValueError(
                     'The numbers of train files'
                     'and weight files do not match.')
+
+        validation_data_files = read_strs_config(
+            TRAIN_SECTION, 'validation_files', False)
+        if validation_data_files is not None:
+            if not isinstance(validation_data_files, list):
+                validation_data_files = [validation_data_files]
+            self.validation_data_files = sorted(
+                sum((glob.glob(f) for f in validation_data_files), []))
+            self.tolerance = float(read_config(TRAIN_SECTION, 'tolerance'))
+        validation_weight_files = read_strs_config(
+            TRAIN_SECTION, 'validation_weight_files', False)
+        if validation_weight_files is not None:
+            if not isinstance(validation_weight_files, list):
+                validation_weight_files = [validation_weight_files]
+            self.validation_weight_files = sorted(
+                sum((glob.glob(f) for f in validation_weight_files), []))
+            if len(validation_data_files) != len(validation_weight_files):
+                raise ValueError(
+                    'The numbers of validation data files'
+                    'and validation weight files do not match.')
+
+        predict_files = read_strs_config(
+            PREDICT_SECTION, 'predict_files', False)
+        self.predict_files = sorted(
+            sum((glob.glob(f) for f in predict_files), []))
 
     def __init__(self, config_file):
         self._get_config(config_file)
