@@ -24,13 +24,13 @@ def train(model, sess, monitor, trace):
 
     tf.train.start_queue_runners(sess)
     st = time.time()
-    step_num = None
+    start_step = None
     end_session = False
     while not (sess.should_stop() or end_session):
         cur = time.time()
         options_ = None
         run_metadata_ = None
-        if step_num is None and trace:
+        if start_step is None and trace:
             options_ = tf.RunOptions(
                 trace_level=tf.RunOptions.FULL_TRACE
             )
@@ -44,6 +44,8 @@ def train(model, sess, monitor, trace):
             break
 
         step_num = res_dict['step_num']
+        if start_step is None:
+            start_step = step_num - 1
         tend = time.time()
 
         if monitor:
@@ -73,7 +75,8 @@ def train(model, sess, monitor, trace):
                 end_session = True
 
     total = time.time() - st
-    print('Average speed: ', step_num * model.batch_size / total, ' ex/s')
+    print('Average speed: ', (step_num - start_step)
+          * model.batch_size / total, ' ex/s')
     print('Model saved to ', model.log_dir)
 
     if trace is not None:
