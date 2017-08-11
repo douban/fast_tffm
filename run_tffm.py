@@ -24,13 +24,13 @@ def train(model, sess, monitor, trace):
 
     tf.train.start_queue_runners(sess)
     st = time.time()
-    step_num = None
+    start_step = None
     end_session = False
     while not (sess.should_stop() or end_session):
         cur = time.time()
         options_ = None
         run_metadata_ = None
-        if step_num is None and trace:
+        if start_step is None and trace:
             options_ = tf.RunOptions(
                 trace_level=tf.RunOptions.FULL_TRACE
             )
@@ -44,6 +44,8 @@ def train(model, sess, monitor, trace):
             break
 
         step_num = res_dict['step_num']
+        if start_step is None:
+            start_step = step_num - 1
         tend = time.time()
 
         if monitor:
@@ -73,7 +75,8 @@ def train(model, sess, monitor, trace):
                 end_session = True
 
     total = time.time() - st
-    print('Average speed: ', step_num * model.batch_size / total, ' ex/s')
+    print('Average speed: ', (step_num - start_step)
+          * model.batch_size / total, ' ex/s')
     print('Model saved to ', model.log_dir)
 
     if trace is not None:
@@ -90,10 +93,11 @@ def main():
     parser.add_argument("task", choices=['train', 'predict'])
     parser.add_argument("config_file", type=str)
     parser.add_argument(
-        "--dist_train",
+        "--dist",
         nargs=4,
         default=None,
-        help="--dist_train job_name task_index ps_hosts worker_hosts")
+        help="For distributed training or prediction"
+        "--dist job_name task_index ps_hosts worker_hosts")
 
     parser.add_argument(
         "-t",
@@ -116,21 +120,21 @@ def main():
     worker_device = '/job:worker'
     is_chief = True
     log_dir = model.log_dir
-    if args.dist_train is not None:
-        ps_hosts = args.dist_train[2].split(',')
-        worker_hosts = args.dist_train[3].split(',')
+    if args.dist is not None:
+        ps_hosts = args.dist[2].split(',')
+        worker_hosts = args.dist[3].split(',')
         cluster = tf.train.ClusterSpec(
             {"ps": ps_hosts, "worker": worker_hosts})
         server = tf.train.Server(cluster,
-                                 job_name=args.dist_train[0],
-                                 task_index=int(args.dist_train[1]))
-        if args.dist_train[0] == "ps":
+                                 job_name=args.dist[0],
+                                 task_index=int(args.dist[1]))
+        if args.dist[0] == "ps":
             server.join()
         else:
-            assert args.dist_train[0] == 'worker'
+            assert args.dist[0] == 'worker'
             master = server.target
-            worker_device = "/job:worker/task:%d" % int(args.dist_train[1])
-            is_chief = (int(args.dist_train[1]) == 0)
+            worker_device = "/job:worker/task:%d" % int(args.dist[1])
+            is_chief = (int(args.dist[1]) == 0)
             if not is_chief:
                 log_dir = None
 

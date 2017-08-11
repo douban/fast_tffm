@@ -22,22 +22,22 @@ CUDA_VISIBLE_DEVICES=-1 python ...
 ### Distributed Training
 Open 4 command line windows. Run the following commands on each window to start 2 parameter servers and 2 workers.
 ```
-python run_tffm.py sample.cfg --dist_train ps 0
-python run_tffm.py sample.cfg --dist_train ps 1
-python run_tffm.py sample.cfg --dist_train worker 0
-python run_tffm.py sample.cfg --dist_train worker 1
+python run_tffm.py train sample.cfg --dist ps 0 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py train sample.cfg --dist ps 1 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py train sample.cfg --dist worker 0 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py train sample.cfg --dist worker 1 localhost:2333,localhost:2334 localhost:2335,localhost:2336
 ```
-### Local Prediction (not supported by most recent update)
+### Local Prediction
 ```
-python fast_tffm.py predict sample.cfg
+python run_tffm.py predict sample.cfg
 ```
 ### Distributed Prediction (not supported by most recent update)
 Open 4 command line windows. Run the following commands on each window to start 2 parameter servers and 2 workers.
 ```
-python fast_tffm.py dist_predict sample.cfg ps 0
-python fast_tffm.py dist_predict sample.cfg ps 1
-python fast_tffm.py dist_predict sample.cfg worker 0
-python fast_tffm.py dist_predict sample.cfg worker 1
+python run_tffm.py predict sample.cfg --dist ps 0 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py predict sample.cfg --dist ps 1 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py predict sample.cfg --dist worker 0 localhost:2333,localhost:2334 localhost:2335,localhost:2336
+python run_tffm.py predict sample.cfg --dist worker 1 localhost:2333,localhost:2334 localhost:2335,localhost:2336
 ```
 ## Benchmark
 
@@ -71,14 +71,14 @@ Check the data/weight files in the data folder for details. The data files are s
 ## Run with TFMesos
 
 ```
-tfrun -w 4 -s 1 -m ${MESOS_MASTER} -- python run_tffm.py sample.cfg --dist_train {job_name} {task_index} {ps_hosts} {worker_hosts}
+tfrun -w 4 -s 1 -m ${MESOS_MASTER} -- python run_tffm.py [train, predict] sample.cfg --dist_train {job_name} {task_index} {ps_hosts} {worker_hosts}
 ```
 
-## Tensorboard Visualization (not supported by most recent update)
+## Tensorboard Visualization
 
-Set the empty log directory path in `sample.cfg`. The default log saving frequency is 10 files per save. 
+Set the empty log directory path in `sample.cfg`. The default log saving frequency is 10 global steps per save. 
 
-Saving content includes the recent 10 files' RMSE and total RMSE of training and validation data.
+Saving content includes RMSE and total RMSE of training and validation data over the last 10 steps.
 
 Find the directory of your tensorflow then use the following command to activate tensorboard:
 ```
