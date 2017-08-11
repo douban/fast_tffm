@@ -100,12 +100,12 @@ def generate_saved_model(model, export_path):
         tensor_info_pred_score = tf.saved_model.utils.build_tensor_info(
             model.pred_score_serving)
 
+        method_name = tf.saved_model.signature_constants.PREDICT_METHOD_NAME
         prediction_signature = (
             tf.saved_model.signature_def_utils.build_signature_def(
                 inputs={'data_lines': tensor_info_data_lines},
                 outputs={'scores': tensor_info_pred_score},
-                method_name=tf.saved_model.signature_constants
-                    .PREDICT_METHOD_NAME))
+                method_name=method_name))
         builder.add_meta_graph_and_variables(
             sess, [tf.saved_model.tag_constants.SERVING],
             signature_def_map={
