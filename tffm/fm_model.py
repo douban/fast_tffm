@@ -125,11 +125,7 @@ class Model(object):
             feature_vals, feature_poses
         )
 
-    def pred_op(self, data_file):
-        with open(data_file) as f:
-            data_lines = f.readlines()
-        data_lines = [l.strip('\n') for l in data_lines]
-
+    def predict(self, data_lines):
         labels, sizes, feature_ids, feature_vals = fm_parser(
             data_lines, self.vocabulary_size
         )
@@ -144,6 +140,16 @@ class Model(object):
         )
 
         return pred_score
+
+    def pred_ops(self):
+        ops = []
+        for data_file in self.predict_files:
+            with open(data_file) as f:
+                data_lines = f.readlines()
+            data_lines = [l.strip('\n') for l in data_lines]
+            ops.append(self.predict(data_lines))
+
+        return ops
 
     def load_validation_data(self):
         if len(self.validation_data_files) == 0:
@@ -186,6 +192,78 @@ class Model(object):
                 ori_ids, feature_vals, feature_poses
             ]))
 
+    def serving_parser(self, data_lines):
+        # Flatten
+        # Now data has the form ['1:1 2:2', '3:3']
+        data_lines = tf.reshape(data_lines, [-1])
+        # Remove spaces
+        # Now data has the form ['1:1', '2:2', '3:3']
+        sparse_data = tf.string_split(data_lines, ' ')
+        # Remove columns
+        # Now data has the form [['1', '1'], ['2', '2'], ['3', '3']]
+        data = tf.reshape(tf.string_split(
+            sparse_data.values, ':').values, [-1, 2])
+        feature_ids = tf.string_to_number(tf.reshape(
+            tf.slice(data, [0, 0], [-1, 1]), [-1]), tf.int64)
+        feature_vals = tf.string_to_number(tf.reshape(
+            tf.slice(data, [0, 1], [-1, 1]), [-1]), tf.float32)
+        # Convert to dense matrices with padding 0
+        feature_ids = tf.sparse_to_dense(
+            sparse_data.indices,
+            sparse_data.dense_shape,
+            feature_ids)
+        feature_vals = tf.sparse_to_dense(
+            sparse_data.indices,
+            sparse_data.dense_shape,
+            feature_vals)
+
+        return feature_ids, feature_vals, sparse_data.dense_shape
+
+    def serving_scorer(self, feature_ids, feature_vals, dense_shape):
+        self.vocab_blocks = []
+        vocab_size_per_block = (
+            self.vocabulary_size / self.vocabulary_block_num + 1
+        )
+
+        for i in range(self.vocabulary_block_num):
+            self.vocab_blocks.append(
+                tf.Variable(
+                    tf.zeros([vocab_size_per_block, self.factor_num + 1]),
+                    name='vocab_block_%d' % i
+                )
+            )
+
+        params = tf.nn.embedding_lookup(
+            self.vocab_blocks, tf.reshape(feature_ids, [-1]))
+
+        shape = tf.concat(
+            [tf.cast(dense_shape, tf.int32), tf.constant([-1])], 0)
+        factors = tf.reshape(tf.slice(params, [0, 1], [-1, -1]), shape)
+        biases = tf.reshape(
+            tf.slice(params, [0, 0], [-1, 1]), tf.cast(dense_shape, tf.int32))
+        fvals = tf.reshape(feature_vals, tf.concat(
+            [tf.cast(dense_shape, tf.int32), tf.constant([1])], 0))
+        factor_sum = tf.reduce_sum(factors * fvals, 1)
+        self.pred_score_serving = \
+            0.5 * tf.reduce_sum(factor_sum * factor_sum, [1]) \
+            - 0.5 * tf.reduce_sum(fvals * fvals * factors * factors, [1, 2]) \
+            + tf.reduce_sum(biases * feature_vals, [1])
+
+        self.saver = tf.train.Saver()
+
+    def build_serving_graph(self):
+        self.data_lines_serving = tf.placeholder(tf.string, name='test_data')
+        (
+            feature_ids_serving,
+            feature_vals_serving,
+            data_dense_shape
+        ) = self.serving_parser(self.data_lines_serving)
+
+        self.serving_scorer(
+            feature_ids_serving,
+            feature_vals_serving,
+            data_dense_shape)
+
     def build_graph(self, monitor, trace):
         self.load_validation_data()
         self.vocab_blocks = []
@@ -217,9 +295,7 @@ class Model(object):
             self.factor_lambda, self.bias_lambda
         )
 
-        self.pred_ops = []
-        for data_file in self.predict_files:
-            self.pred_ops.append(self.pred_op(data_file))
+        self.pred_ops = self.pred_ops()
 
         if self.validation_data is not None:
             local_params = tf.nn.embedding_lookup(

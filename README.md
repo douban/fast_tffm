@@ -39,19 +39,7 @@ python run_tffm.py predict sample.cfg --dist ps 1 localhost:2333,localhost:2334 
 python run_tffm.py predict sample.cfg --dist worker 0 localhost:2333,localhost:2334 localhost:2335,localhost:2336
 python run_tffm.py predict sample.cfg --dist worker 1 localhost:2333,localhost:2334 localhost:2335,localhost:2336
 ```
-## Benchmark
-
-1. Local Mode. Training speed compared with difacto using the same configuration
-
-  + *Configuration*: 36672494 training examples, 10 threads, factor_num = 8, batch_size = 10000, epoch_num = 1, vocabulary_size = 40000000
-  + **Difacto**: 337 seconds. 108820 examples / second.
-  + **FastTffm**: 157 seconds. 233582 examples / second.
-  
-2. Distriubuted Mode. (I did not find other open source projects which support distributed training. Difacto claims so, but their distributed mode is not implemeted yet)
-  + *Configuration*: 36672494 training examples, 10 threads, factor_num = 8, batch_size = 10000, epoch_num = 1, vocabulary_size = 40000000
-  + *Cluster*: 1 ps, 4 workers.
-  + **FastTffm**: 49 seconds. 748418 examples / second.
-  
+ 
 ## Input Data Format
 1. Data File
   ```
@@ -73,6 +61,19 @@ Check the data/weight files in the data folder for details. The data files are s
 ```
 tfrun -w 4 -s 1 -m ${MESOS_MASTER} -- python run_tffm.py [train, predict] sample.cfg --dist_train {job_name} {task_index} {ps_hosts} {worker_hosts}
 ```
+## Export Model to Saved_Model_CLI
+
+To generate a new model (export path must not be a pre-existing directory):
+```
+python run_tffm.py generate sample.cfg --export_path saved_model
+```
+
+To use the model for prediction:
+
+```
+saved_model_cli run --dir /home2/libingqing/fast_tffm/saved_model_simplified/ --tag_set serve --signature_def serving_default --inputs data_lines=data.npy --outdir=./scores
+```
+For detailed instructions on using SavedModel CLI, refer to [TensorFlow official documentation.](https://www.tensorflow.org/programmers_guide/saved_model_cli) 
 
 ## Tensorboard Visualization
 

@@ -88,9 +88,39 @@ def train(model, sess, monitor, trace):
             trace_file.write(timeline_info.generate_chrome_trace_format())
 
 
+def generate_saved_model(model, export_path):
+    ckpt = tf.train.get_checkpoint_state(model.log_dir)
+    with tf.Session() as sess:
+        model.saver.restore(sess, ckpt.model_checkpoint_path)
+        print('Exporting trained model to', export_path)
+        builder = tf.saved_model.builder.SavedModelBuilder(export_path)
+
+        tensor_info_data_lines = tf.saved_model.utils.build_tensor_info(
+            model.data_lines_serving)
+        tensor_info_pred_score = tf.saved_model.utils.build_tensor_info(
+            model.pred_score_serving)
+
+        prediction_signature = (
+            tf.saved_model.signature_def_utils.build_signature_def(
+                inputs={'data_lines': tensor_info_data_lines},
+                outputs={'scores': tensor_info_pred_score},
+                method_name=tf.saved_model.signature_constants
+                    .PREDICT_METHOD_NAME))
+        builder.add_meta_graph_and_variables(
+            sess, [tf.saved_model.tag_constants.SERVING],
+            signature_def_map={
+                tf.saved_model.signature_constants
+                .DEFAULT_SERVING_SIGNATURE_DEF_KEY:
+                prediction_signature,
+            })
+        builder.save()
+
+        print('Done exporting!')
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("task", choices=['train', 'predict'])
+    parser.add_argument("task", choices=['train', 'predict', 'generate'])
     parser.add_argument("config_file", type=str)
     parser.add_argument(
         "--dist",
@@ -108,12 +138,15 @@ def main():
         "--monitor",
         action="store_true",
         help="Prints execution speed to screen")
+    parser.add_argument(
+        "--export_path",
+        help="Specifies the location to which the model is to be exported.")
     args = parser.parse_args()
 
     model = Model(args.config_file)
     if args.task == 'predict' and model.log_dir is None:
         print("Missing log directory. Must include a checkpoint file.")
-        os.exit(1)
+        os._exit(1)
 
     cluster = None
     master = ''
@@ -137,24 +170,33 @@ def main():
             is_chief = (int(args.dist[1]) == 0)
             if not is_chief:
                 log_dir = None
+    if args.task == 'generate':
+        if args.export_path is None:
+            print("Export path is not specified. Use --export_path.")
+            os._exit(2)
 
-    with tf.device(tf.train.replica_device_setter(
-            worker_device=worker_device,
-            cluster=cluster)):
-        model.build_graph(args.monitor, args.trace)
+        model.build_serving_graph()
+        generate_saved_model(model, args.export_path)
+    else:
+        with tf.device(tf.train.replica_device_setter(
+                worker_device=worker_device,
+                cluster=cluster)):
+            model.build_graph(args.monitor, args.trace)
 
-    saver_hook = tf.train.CheckpointSaverHook(
-        model.log_dir, save_steps=model.save_steps)
-    with tf.train.MonitoredTrainingSession(
-        master=master, is_chief=is_chief, checkpoint_dir=log_dir,
-        save_summaries_steps=model.save_summaries_steps,
-        hooks=[saver_hook]
-    ) as mon_sess:
-        print("========", args.task, "========")
-        if args.task == 'train':
-            train(model, mon_sess, args.monitor, args.trace)
-        else:
-            predict(model, mon_sess)
+        hooks = []
+        if model.log_dir is not None:
+            hooks.append(tf.train.CheckpointSaverHook(
+                model.log_dir, save_steps=model.save_steps))
+        with tf.train.MonitoredTrainingSession(
+            master=master, is_chief=is_chief, checkpoint_dir=log_dir,
+            save_summaries_steps=model.save_summaries_steps,
+            hooks=hooks
+        ) as mon_sess:
+            print("========", args.task, "========")
+            if args.task == 'train':
+                train(model, mon_sess, args.monitor, args.trace)
+            elif args.task == 'predict':
+                predict(model, mon_sess)
 
 
 if __name__ == '__main__':
