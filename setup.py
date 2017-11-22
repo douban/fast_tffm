@@ -89,14 +89,29 @@ class TFBuild(build_ext):
         for d in self.get_tf_include():
             self.include_dirs.append(d)
 
+        for p, l in self.get_tf_libraries():
+            self.library_dirs.append(p)
+            self.libraries.append(l)
+
     def get_tf_include(self):
         import tensorflow as tf
         include_dir = tf.sysconfig.get_include()
-        protobuf_dir = os.path.join(
+        external_dir = os.path.join(
             os.path.dirname(os.path.dirname(include_dir)),
-            'external', 'protobuf', 'src'
+            'external'
         )
-        return [include_dir, protobuf_dir]
+        protobuf_dirs = [os.path.join(external_dir, n, 'src')
+            for n in ['protobuf', 'protobuf_archive']
+        ]
+
+        nsync_dir = os.path.join(external_dir, 'nsync', 'public')
+
+        return [include_dir, nsync_dir] + protobuf_dirs
+
+    def get_tf_libraries(self):
+        import tensorflow as tf
+        path = tf.sysconfig.get_lib()
+        return [(path, 'tensorflow_framework')]
 
     def build_extensions(self):
         _compiler = self.compiler
