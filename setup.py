@@ -111,7 +111,10 @@ class TFBuild(build_ext):
     def get_tf_libraries(self):
         import tensorflow as tf
         path = tf.sysconfig.get_lib()
-        return [(path, 'tensorflow_framework')]
+        if os.path.exists(os.path.join(path, 'libtensorflow_framework.so')):
+            return [(path, 'tensorflow_framework')]
+        else:
+            return []
 
     def build_extensions(self):
         _compiler = self.compiler
