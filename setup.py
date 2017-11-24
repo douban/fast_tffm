@@ -106,7 +106,7 @@ class TFBuild(build_ext):
 
         nsync_dir = os.path.join(external_dir, 'nsync', 'public')
 
-        return [include_dir, nsync_dir] + protobuf_dirs
+        return protobuf_dirs + [include_dir, nsync_dir]
 
     def get_tf_libraries(self):
         import tensorflow as tf
