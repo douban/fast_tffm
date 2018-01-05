@@ -26,6 +26,9 @@ NVCCFLAGS.extend([
     '--expt-relaxed-constexpr'
 ])
 
+if 'CXX' in os.environ:
+    NVCCFLAGS.extend(['-ccbin', os.environ['CXX']])
+
 CFLAGS.append('-fPIC')
 
 
