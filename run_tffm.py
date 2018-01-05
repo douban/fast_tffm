@@ -46,13 +46,14 @@ def train(model, sess, monitor, trace):
         step_num = res_dict['step_num']
         if start_step is None:
             start_step = step_num - 1
+            prev_step = start_step
         tend = time.time()
 
         if monitor:
             _min = model.shuffle_threads * min_after_dequeue
             shuffleq_size = max(sum(res_dict['shuffleq_sizes']) - _min, 0)
             print(
-                'speed:', model.batch_size / (tend - cur),
+                'speed:', model.batch_size / (tend - cur) * (step_num - prev_step),
                 'shuffle_queue: %.2f%%' % (
                     shuffleq_size * 100.0 / (capacity * model.shuffle_threads),
                 ),
@@ -61,6 +62,7 @@ def train(model, sess, monitor, trace):
                 )
             )
 
+        prev_step = step_num
         loss = res_dict['loss']
         print('-- Global Step: %d; Avg loss: %.5f;' % (step_num, loss))
 
@@ -125,13 +127,21 @@ def main():
     parser.add_argument(
         "--dist",
         nargs=4,
+        metavar=('JOB_NAME', 'TASK_INDEX', 'PS_HOSTS', 'WORKER_HOSTS'),
         default=None,
         help="For distributed training or prediction"
-        "--dist job_name task_index ps_hosts worker_hosts")
+    )
+
+    parser.add_argument(
+        "--protocol",
+        default='grpc',
+        help="protocol for distributed training"
+    )
 
     parser.add_argument(
         "-t",
         "--trace",
+        metavar='OUTPUT_FILE_NAME',
         help="Stores graph info and runtime stats, generates a timeline file")
     parser.add_argument(
         "-m,",
@@ -160,7 +170,8 @@ def main():
             {"ps": ps_hosts, "worker": worker_hosts})
         server = tf.train.Server(cluster,
                                  job_name=args.dist[0],
-                                 task_index=int(args.dist[1]))
+                                 task_index=int(args.dist[1]),
+                                 protocol=args.protocol)
         if args.dist[0] == "ps":
             server.join()
         else:

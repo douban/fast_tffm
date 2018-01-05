@@ -428,6 +428,14 @@ class Model(object):
                 'save_steps',
                 not_null=False))
 
+        if config.has_option(TRAIN_SECTION, 'queue_size'):
+            self.queue_size = int(read_config(TRAIN_SECTION, 'queue_size'))
+
+        if config.has_option(TRAIN_SECTION, 'shuffle_threads'):
+            self.shuffle_threads = int(
+                read_config(TRAIN_SECTION, 'shuffle_threads')
+            )
+
         train_files = read_strs_config(TRAIN_SECTION, 'train_files')
         self.train_files = sorted(sum((glob.glob(f) for f in train_files), []))
         weight_files = read_strs_config(TRAIN_SECTION, 'weight_files', False)
