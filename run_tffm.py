@@ -135,7 +135,15 @@ def main():
     parser.add_argument(
         "--protocol",
         default='grpc',
-        help="protocol for distributed training"
+        help="protocol for distributed training, "
+        "only effective when in distributed mode"
+    )
+
+    parser.add_argument(
+        "--wait-for-workers",
+        type=int,
+        help="Minimal workers should be started before training, "
+        "only effective when in distributed mode"
     )
 
     parser.add_argument(
@@ -166,6 +174,10 @@ def main():
     if args.dist is not None:
         ps_hosts = args.dist[2].split(',')
         worker_hosts = args.dist[3].split(',')
+        min_workers = args.wait_for_workers
+        if min_workers is None:
+            min_workers = len(worker_hosts)
+
         cluster = tf.train.ClusterSpec(
             {"ps": ps_hosts, "worker": worker_hosts})
         server = tf.train.Server(cluster,
@@ -192,6 +204,10 @@ def main():
         with tf.device(tf.train.replica_device_setter(
                 worker_device=worker_device,
                 cluster=cluster)):
+            if args.dist:
+                started_workers = tf.Variable(0, dtype=tf.int32, trainable=False)
+                inc_workers = tf.assign(started_workers, started_workers + 1)
+
             model.build_graph(args.monitor, args.trace)
 
         hooks = []
@@ -204,6 +220,11 @@ def main():
             hooks=hooks
         ) as mon_sess:
             print("========", args.task, "========")
+            if args.dist:
+                mon_sess.run(inc_workers)
+                while mon_sess.run(started_workers) < min_workers:
+                    time.sleep(0.2)
+
             if args.task == 'train':
                 train(model, mon_sess, args.monitor, args.trace)
             elif args.task == 'predict':
