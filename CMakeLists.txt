@@ -14,7 +14,7 @@ if (APPLE)
 endif()
 set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
 execute_process(
-  COMMAND python -c "import tensorflow as tf; print(tf.sysconfig.get_include())"
+  COMMAND python -c "import tensorflow as tf; import sys; sys.stdout.write(tf.sysconfig.get_include())"
   OUTPUT_VARIABLE TF_INC
   RESULT_VARIABLE TF_RESULT
   ERROR_VARIABLE TF_ERR
@@ -23,9 +23,30 @@ if (NOT ${TF_RESULT} EQUAL 0)
   message(FATAL_ERROR "Failed to get Tensorflow include path: " ${TF_ERR})
 endif()
 
-get_filename_component(PROTOBUF_DIR "${TF_INC}/../../external/protobuf/src/" ABSOLUTE)
+execute_process(
+  COMMAND python -c "import tensorflow as tf; import sys; sys.stdout.write(tf.sysconfig.get_lib())"
+  OUTPUT_VARIABLE TF_LIB
+  RESULT_VARIABLE TF_RESULT
+  ERROR_VARIABLE TF_ERR
+)
+if (NOT ${TF_RESULT} EQUAL 0)
+  message(FATAL_ERROR "Failed to get Tensorflow lib path: " ${TF_ERR})
+endif()
+
 include_directories(${TF_INC})
+
+get_filename_component(PROTOBUF_DIR "${TF_INC}/../../external/protobuf/src/" ABSOLUTE)
 include_directories(${PROTOBUF_DIR})
+
+get_filename_component(PROTOBUF_ARCHIVE_DIR
+	"${TF_INC}/../../external/protobuf_archive/src/" ABSOLUTE)
+include_directories(${PROTOBUF_ARCHIVE_DIR})
+
+get_filename_component(NSYNC_DIR "${TF_INC}/../../external/nsync/public/" ABSOLUTE)
+include_directories(${NSYNC_DIR})
+
+link_directories(${TF_LIB})
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/lib/)
 set(SRCS cc/fm_grad_op.cc cc/fm_parser_op.cc cc/fm_scorer_op.cc)
 if(USE_CUDA AND CUDA_FOUND)
@@ -36,6 +57,9 @@ if(USE_CUDA AND CUDA_FOUND)
 else()
   add_library(fast_tffm SHARED ${SRCS})
 endif()
+
+target_link_libraries(fast_tffm tensorflow_framework)
+
 enable_testing()
 add_test(NAME test_scorer COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/test/fm_scorer_op_test.py)
 add_test(NAME test_parser COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/test/fm_parser_op_test.py)

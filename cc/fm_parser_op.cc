@@ -90,14 +90,14 @@ class FmParserOp : public OpKernel {
             errors::InvalidArgument(
               "Invalid feature id. Should be in range [0, vocabulary_size).", line
             )
-          )
+          );
         }
         p = nextptr;
         if (*p == ':') {
           p += 1;
           fv = strtof(p, &nextptr);
           OP_REQUIRES(ctx, p != nextptr,
-            errors::InvalidArgument("Invalid feature value. ", line))
+            errors::InvalidArgument("Invalid feature value. ", line));
           p = nextptr;
         } else {
           fv = 1;
